@@ -1,6 +1,6 @@
 [package]
 name = "ledger-kv"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 description = "A Rust-based key-value store designed for append-only data storage. Features SHA-256 checksums for data integrity and cross-compiles to wasm32 for smart contract applications."
 license = "MIT OR Apache-2.0"
