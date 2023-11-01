@@ -14,7 +14,7 @@ Add LedgerKV to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-ledger-kv = "0.1.0"+
+ledger-kv = "0.1.0"
 ```
 
 ## Usage
