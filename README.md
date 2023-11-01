@@ -26,13 +26,13 @@ use ledger_kv::LedgerKV;  // Replace with your actual library name
 use ledger_kv::EntryLabel;
 use ledger_kv::Operation;
 
-let data_dir = PathBuf::from("data/");
+let data_dir = PathBuf::from("/tmp/data/");
 let description = "example_ledger";
 
 // Create a new LedgerKV instance
 let mut ledger = LedgerKV::new(data_dir, description);
 
-// Perform an upsert operation
+// Perform an upsert (insert/update) operation
 let key = vec![1, 2, 3];
 let value = vec![4, 5, 6];
 ledger.upsert(EntryLabel::NodeProvider, key, value).unwrap();
