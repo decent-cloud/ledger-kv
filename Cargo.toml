@@ -4,6 +4,10 @@ version = "0.1.0"
 edition = "2021"
 description = "A Rust-based key-value store designed for append-only data storage. Features SHA-256 checksums for data integrity and cross-compiles to wasm32 for smart contract applications."
 license = "MIT OR Apache-2.0"
+documentation = "https://github.com/sshtmc/ledger-kv"
+readme = "README.md"
+homepage = "https://github.com/sshtmc/ledger-kv"
+repository = "https://github.com/sshtmc/ledger-kv"
 
 [lib]
 name = "ledger_kv"
