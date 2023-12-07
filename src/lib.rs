@@ -1,8 +1,8 @@
 //! This module implements a key-value storage system called LedgerKV.
 //!
 //! The LedgerKV struct provides methods for inserting, deleting, and retrieving key-value entries.
-//! It uses a journaling approach to store the entries in a binary file. Each entry is appended to the
-//! file along with its length, allowing efficient retrieval and updates.
+//! It journals the entries in a binary file. Each entry is appended to the file along with its
+//! length, allowing efficient retrieval and updates.
 //!
 //! The LedgerKV struct maintains an in-memory index of the entries for quick lookups. It uses a HashMap
 //! to store the entries, where the key is an enum value representing the label of the entry, and the value
@@ -20,13 +20,15 @@
 //! ```rust
 //! use std::path::PathBuf;
 //! use ledger_kv::{LedgerKV, EntryLabel, Operation};
+//! use ledger_kv::data_store::{DataBackend, MetadataBackend};
 //!
 //! fn main() {
-//!     let data_dir = PathBuf::from("/tmp/ledger_kv/data");
-//!     let description = "example";
+//!     let file_path = PathBuf::from("/tmp/ledger_kv/test_data.bin");
+//!     let data_backend = DataBackend::new(file_path.with_extension("bin"));
+//!     let metadata_backend = MetadataBackend::new(file_path.with_extension("meta"));
 //!
 //!     // Create a new LedgerKV instance
-//!     let mut ledger_kv = LedgerKV::new(data_dir, description);
+//!     let mut ledger_kv = LedgerKV::new(data_backend, metadata_backend);
 //!
 //!     // Insert a new entry
 //!     let label = EntryLabel::Unspecified;
@@ -43,66 +45,104 @@
 //! }
 //! ```
 
-mod kv_entry;
-mod data_rw_trait;
-use data_rw_trait::LedgerKvMetadata;
+pub mod kv_entry;
 
 #[cfg(target_arch = "wasm32")]
-mod data_rw_wasm32_ic;
+pub mod data_store_wasm32_ic;
 #[cfg(target_arch = "wasm32")]
-use data_rw_wasm32_ic as data_rw;
+pub use data_store_wasm32_ic as data_store;
 
 #[cfg(not(target_arch = "wasm32"))]
-mod data_rw_native;
+pub mod data_store_native;
 #[cfg(not(target_arch = "wasm32"))]
-use data_rw_native as data_rw;
+pub use data_store_native as data_store;
 
 use ahash::AHashMap;
-use borsh::{to_vec, BorshDeserialize};
-use data_rw::Metadata;
-use fs_err as fs;
-use fs_err::{File, OpenOptions};
+use borsh::{from_slice, to_vec};
+use borsh_derive::{BorshDeserialize, BorshSerialize};
+use data_store::{DataBackend, MetadataBackend};
 use indexmap::IndexMap;
+pub use kv_entry::{EntryLabel, KvEntry, Operation};
 use log::{info, warn};
-use memmap2::Mmap;
 use sha2::{Digest, Sha256};
 use std::cell::RefCell;
-use std::io::{Cursor, Seek, SeekFrom, Write};
-use std::path::PathBuf;
-pub use kv_entry::{KvEntry, EntryLabel, Operation};
+
+/// Struct representing the metadata of the ledger.
+#[derive(BorshSerialize, BorshDeserialize, Clone, Debug)]
+pub(crate) struct Metadata {
+    #[borsh(skip)]
+    pub(crate) metadata_backend: MetadataBackend,
+    /// The number of entries in the ledger.
+    pub(crate) num_entries: usize,
+    /// The last offset in the file.
+    pub(crate) last_offset: usize,
+    /// The hash of the parent metadata.
+    pub(crate) parent_hash: Vec<u8>,
+}
+
+impl Metadata {
+    pub fn new(metadata_backend: MetadataBackend) -> Self {
+        Metadata {
+            metadata_backend,
+            num_entries: 0,
+            last_offset: 0,
+            parent_hash: Vec::new(),
+        }
+    }
+
+    /// Refreshes the metadata by reading from the file.
+    fn refresh(&mut self) {
+        let metadata_bytes = self.metadata_backend.read_raw_metadata_bytes();
+
+        if metadata_bytes.is_empty() {
+            self.num_entries = 0;
+            self.last_offset = 0;
+            self.parent_hash = Vec::new();
+        } else {
+            let deserialized_metadata: Metadata = from_slice::<Metadata>(&metadata_bytes).unwrap();
+            self.num_entries = deserialized_metadata.num_entries;
+            self.last_offset = deserialized_metadata.last_offset;
+            self.parent_hash = deserialized_metadata.parent_hash;
+        }
+
+        info!(
+            "Read metadata of num_entries {} last_offset {}",
+            self.num_entries, self.last_offset
+        );
+    }
+
+    fn append_entry(&mut self, entry: &KvEntry, position: usize) -> anyhow::Result<()> {
+        // let md: &mut Metadata = &mut *self.borrow_mut();
+        self.num_entries += 1;
+        self.parent_hash = entry.hash.clone();
+        self.last_offset = position;
+        let metadata_bytes = to_vec(self).expect("Failed to serialize metadata");
+        self.metadata_backend
+            .save_raw_metadata_bytes(&metadata_bytes)?;
+        self.refresh();
+        Ok(())
+    }
+
+    fn get_parent_hash(&self) -> &[u8] {
+        self.parent_hash.as_slice()
+    }
+}
 
 /// Struct representing the LedgerKV.
 pub struct LedgerKV {
-    pub file_path: PathBuf,
+    data_backend: DataBackend,
     metadata: RefCell<Metadata>,
     entries: AHashMap<EntryLabel, IndexMap<Vec<u8>, KvEntry>>,
     entry_hash2offset: IndexMap<Vec<u8>, usize>,
 }
 
 impl LedgerKV {
-    /// Creates a new `LedgerKV` instance.
-    ///
-    /// # Arguments
-    ///
-    /// * `data_dir` - The directory where the ledger data is stored.
-    /// * `description` - A description of the ledger.
-    ///
-    /// # Returns
-    ///
-    /// A new `LedgerKV` instance.
-    pub fn new(data_dir: PathBuf, description: &str) -> Self {
-        fs::create_dir_all(&data_dir).unwrap();
-        let mut file_path = data_dir.join(description);
-        file_path.set_extension("bin");
-        let metadata = Metadata::new(data_dir.clone(), description);
-        let entries = AHashMap::new();
-        let entries_hashes = IndexMap::new();
-
+    pub fn new(data_backend: DataBackend, metadata_backend: MetadataBackend) -> Self {
         LedgerKV {
-            file_path,
-            metadata: RefCell::new(metadata),
-            entries,
-            entry_hash2offset: entries_hashes,
+            data_backend,
+            metadata: RefCell::new(Metadata::new(metadata_backend)),
+            entries: AHashMap::new(),
+            entry_hash2offset: IndexMap::new(),
         }
         .refresh_ledger()
     }
@@ -115,14 +155,6 @@ impl LedgerKV {
         hasher.finalize().to_vec()
     }
 
-    fn _get_append_journal_file(&self) -> anyhow::Result<File> {
-        OpenOptions::new()
-            .append(true)
-            .create(true)
-            .open(&self.file_path)
-            .map_err(|e| anyhow::format_err!("Open file failed: {}", e))
-    }
-
     fn _journal_append_kv_entry(&self, entry: &KvEntry) -> anyhow::Result<()> {
         // Prepare entry as serialized bytes
         let serialized_data = to_vec(&entry)?;
@@ -130,21 +162,11 @@ impl LedgerKV {
         let entry_len_bytes = serialized_data.len();
         let serialized_data_len = to_vec(&entry_len_bytes).expect("failed to serialize entry len");
 
-        let mut file = self._get_append_journal_file()?;
-        // Append entry len, as bytes
-        file.write_all(&serialized_data_len)
-            .map_err(|e| anyhow::format_err!("Append file failed: {}", e))?;
-        // Append entry
-        file.write_all(&serialized_data)
-            .map_err(|e| anyhow::format_err!("Append file failed: {}", e))?;
+        self.data_backend.append_to_ledger(&serialized_data_len)?;
+        let position = self.data_backend.append_to_ledger(&serialized_data)?;
 
         println!("Entry hash: {:?}", entry.hash);
-        self.metadata.borrow_mut().num_entries += 1;
-        self.metadata.borrow_mut().parent_hash = entry.hash.clone();
-        self.metadata.borrow_mut().last_offset = file.stream_position()? as usize;
-        self.metadata.borrow_mut().save();
-        self.metadata.borrow_mut().refresh();
-        Ok(())
+        self.metadata.borrow_mut().append_entry(entry, position)
     }
 
     pub fn upsert(
@@ -210,15 +232,26 @@ impl LedgerKV {
         self.entry_hash2offset.clear();
         self.metadata.borrow_mut().refresh();
 
-        // If the file does not exist, just return
-        if !self.file_path.exists() {
+        // If the backend is not ready (e.g. the backing file does not exist), just return
+        if !self.data_backend.ready() {
             return self;
         }
 
         let mut entries_hash2offset = IndexMap::new();
 
-        for entry in self.iter_raw().collect::<Vec<_>>() {
+        self.metadata.borrow_mut().refresh();
+        let num_entries = self.metadata.borrow().num_entries;
+        info!("Num entries: {}", self.metadata.borrow().num_entries);
+
+        let mut parent_hash = Vec::new();
+        for entry in self.data_backend.iter_raw(num_entries).collect::<Vec<_>>() {
             // Update the in-memory IndexMap of entries, used for quick lookups
+            let expected_hash =
+                Self::_compute_cumulative_hash(&parent_hash, &entry.key, &entry.value);
+            assert_eq!(expected_hash, entry.hash);
+
+            parent_hash.clear();
+            parent_hash.extend_from_slice(&entry.hash);
 
             let entries = match self.entries.get_mut(&entry.label) {
                 Some(entries) => entries,
@@ -258,69 +291,21 @@ impl LedgerKV {
             .collect::<Vec<_>>()
             .into_iter()
     }
-
-    pub fn iter_raw(&self) -> impl Iterator<Item = KvEntry> + '_ {
-        let file = OpenOptions::new()
-            .read(true)
-            .write(true)
-            .create(true)
-            .open(&self.file_path)
-            .expect("failed to open ledger file");
-        let mmap = unsafe { Mmap::map(&file).unwrap() };
-        self.metadata.borrow_mut().refresh();
-        let cursor = Cursor::new(mmap);
-
-        info!("Num entries: {}", self.metadata.borrow().num_entries);
-        // scan is used to build a lazy iterator
-        // it gives us a way to maintain state between calls to the iterator
-        // (in this case, the Cursor and parent_hash).
-        let iterator =
-            (0..self.metadata.borrow().num_entries).scan((cursor, Vec::new()), |state, _| {
-                let (cursor, parent_hash) = state;
-                let mut slice_begin = cursor.position() as usize;
-                let mut slice = &cursor.get_ref()[slice_begin..];
-
-                let entry_len_bytes = match usize::deserialize(&mut slice) {
-                    Ok(len) => len,
-                    Err(_) => panic!("Deserialize error"),
-                };
-
-                let size_of_usize = std::mem::size_of_val(&entry_len_bytes);
-                slice_begin = cursor.position() as usize + size_of_usize;
-                let mut slice = &cursor.get_ref()[slice_begin..];
-
-                let entry = match KvEntry::deserialize(&mut slice) {
-                    Ok(entry) => entry,
-                    Err(_) => panic!("Deserialize error"),
-                };
-
-                let expected_hash =
-                    Self::_compute_cumulative_hash(parent_hash, &entry.key, &entry.value);
-                assert_eq!(expected_hash, entry.hash);
-                parent_hash.clear();
-                parent_hash.extend_from_slice(&entry.hash);
-
-                let seek_offset = size_of_usize + entry_len_bytes;
-                cursor
-                    .seek(SeekFrom::Current(seek_offset as i64))
-                    .expect("Seek error");
-
-                Some(entry)
-            });
-
-        iterator
-    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tempfile::tempdir;
 
     fn new_temp_ledger() -> LedgerKV {
-        let data_dir = tempdir().unwrap().into_path();
-        let file_name = "test.bin";
-        LedgerKV::new(data_dir.clone(), file_name)
+        // Create a temporary directory for the test
+        let file_path = tempfile::tempdir()
+            .unwrap()
+            .into_path()
+            .join("test_ledger_store");
+        let data_backend = DataBackend::new(file_path.with_extension("bin"));
+        let metadata_backend = MetadataBackend::new(file_path.with_extension("meta"));
+        LedgerKV::new(data_backend, metadata_backend)
     }
 
     #[test]
@@ -338,13 +323,6 @@ mod tests {
                 120, 104, 240, 212, 241, 106, 15, 2, 208, 241, 218, 36, 249, 162
             ]
         );
-    }
-
-    #[test]
-    fn test_get_append_journal_file() {
-        let ledger_kv = new_temp_ledger();
-        let result = ledger_kv._get_append_journal_file();
-        assert!(result.is_ok());
     }
 
     #[test]
@@ -484,11 +462,52 @@ mod tests {
         ledger_kv
             .upsert(EntryLabel::Unspecified, key.clone(), value.clone())
             .unwrap();
-        let parent_hash = ledger_kv.metadata.borrow().parent_hash.clone();
-        fs::remove_file(ledger_kv.file_path.clone()).unwrap();
+        let expected_parent_hash = vec![
+            113, 146, 56, 92, 60, 6, 5, 222, 85, 187, 148, 118, 206, 29, 144, 116, 129, 144, 236,
+            179, 42, 142, 237, 127, 82, 7, 179, 12, 246, 161, 254, 137,
+        ];
+        ledger_kv = ledger_kv.refresh_ledger();
+
+        let entry: KvEntry = ledger_kv
+            .entries
+            .get(&EntryLabel::Unspecified)
+            .unwrap()
+            .values()
+            .next()
+            .unwrap()
+            .clone();
+        assert_eq!(
+            entry,
+            KvEntry {
+                label: EntryLabel::Unspecified,
+                key: key,
+                value: value,
+                operation: Operation::Upsert,
+                entry_offset: 0,
+                hash: vec![
+                    113, 146, 56, 92, 60, 6, 5, 222, 85, 187, 148, 118, 206, 29, 144, 116, 129,
+                    144, 236, 179, 42, 142, 237, 127, 82, 7, 179, 12, 246, 161, 254, 137
+                ],
+            }
+        );
+        assert_eq!(
+            ledger_kv.metadata.borrow().parent_hash,
+            expected_parent_hash
+        );
+
+        std::fs::remove_file(ledger_kv.data_backend.file_path.clone()).unwrap();
+        std::fs::remove_file(
+            ledger_kv
+                .metadata
+                .borrow()
+                .metadata_backend
+                .file_path
+                .clone(),
+        )
+        .unwrap();
         ledger_kv = ledger_kv.refresh_ledger();
 
         assert_eq!(ledger_kv.entries.get(&EntryLabel::Unspecified), None);
-        assert_eq!(ledger_kv.metadata.borrow().parent_hash, parent_hash);
+        assert_eq!(ledger_kv.metadata.borrow().parent_hash, vec![]);
     }
 }

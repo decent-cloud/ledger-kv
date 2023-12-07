@@ -2,10 +2,14 @@
 ///
 /// The CLI allows users to perform various operations on a ledger, such as listing entries, adding key-value pairs, and deleting entries.
 ///
+use ledger_kv::data_store;
+
+use data_store::{DataBackend, MetadataBackend};
+
 use clap::{arg, Arg, Command};
+use ledger_kv::{EntryLabel, LedgerKV};
 use std::path::PathBuf;
 use std::str::FromStr;
-use ledger_kv::{LedgerKV, EntryLabel};
 
 /// Struct to hold the parsed command-line arguments
 struct ParsedArgs {
@@ -36,10 +40,10 @@ fn parse_args() -> ParsedArgs {
 
     let list = *matches.get_one::<bool>("list").unwrap_or(&false);
 
-    let add = matches.get_many::<String>("add").map(|mut vals| {
+    let add = matches.get_many::<String>("add").map(|mut values| {
         (
-            vals.next().unwrap().to_string(),
-            vals.next().unwrap().to_string(),
+            values.next().unwrap().to_string(),
+            values.next().unwrap().to_string(),
         )
     });
 
@@ -67,8 +71,10 @@ fn main() -> anyhow::Result<()> {
         .map_err(|e| format!("Failed to parse directory path {}: {}", dir, e))
         .unwrap();
 
-    let file_name = "store.bin";
-    let mut ledger_kv = LedgerKV::new(data_dir, file_name);
+    let file_path = data_dir.join("ledger_store");
+    let data_backend = DataBackend::new(file_path.with_extension("bin"));
+    let metadata_backend = MetadataBackend::new(file_path.with_extension("meta"));
+    let mut ledger_kv = LedgerKV::new(data_backend, metadata_backend);
 
     if args.list {
         println!("Listing entries:");
