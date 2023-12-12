@@ -45,7 +45,7 @@
 //! }
 //! ```
 
-pub mod kv_entry;
+pub mod ledger_entry;
 
 #[cfg(target_arch = "wasm32")]
 pub mod data_store_wasm32_ic;
@@ -62,7 +62,7 @@ use borsh::{from_slice, to_vec};
 use borsh_derive::{BorshDeserialize, BorshSerialize};
 use data_store::{DataBackend, MetadataBackend};
 use indexmap::IndexMap;
-pub use kv_entry::{EntryLabel, KvEntry, Operation};
+pub use ledger_entry::{EntryLabel, LedgerEntry, Operation};
 use log::{info, warn};
 use sha2::{Digest, Sha256};
 use std::cell::RefCell;
@@ -111,7 +111,7 @@ impl Metadata {
         );
     }
 
-    fn append_entry(&mut self, entry: &KvEntry, position: usize) -> anyhow::Result<()> {
+    fn append_entry(&mut self, entry: &LedgerEntry, position: usize) -> anyhow::Result<()> {
         // let md: &mut Metadata = &mut *self.borrow_mut();
         self.num_entries += 1;
         self.parent_hash = entry.hash.clone();
@@ -132,7 +132,7 @@ impl Metadata {
 pub struct LedgerKV {
     data_backend: DataBackend,
     metadata: RefCell<Metadata>,
-    entries: AHashMap<EntryLabel, IndexMap<Vec<u8>, KvEntry>>,
+    entries: AHashMap<EntryLabel, IndexMap<Vec<u8>, LedgerEntry>>,
     entry_hash2offset: IndexMap<Vec<u8>, usize>,
 }
 
@@ -155,7 +155,7 @@ impl LedgerKV {
         hasher.finalize().to_vec()
     }
 
-    fn _journal_append_kv_entry(&self, entry: &KvEntry) -> anyhow::Result<()> {
+    fn _journal_append_kv_entry(&self, entry: &LedgerEntry) -> anyhow::Result<()> {
         // Prepare entry as serialized bytes
         let serialized_data = to_vec(&entry)?;
         // Prepare entry len, as bytes
@@ -177,7 +177,7 @@ impl LedgerKV {
     ) -> anyhow::Result<()> {
         let hash =
             Self::_compute_cumulative_hash(&self.metadata.borrow().get_parent_hash(), &key, &value);
-        let entry = KvEntry::new(
+        let entry = LedgerEntry::new(
             label.clone(),
             key.clone(),
             value.clone(),
@@ -204,7 +204,7 @@ impl LedgerKV {
 
     pub fn delete(&mut self, label: EntryLabel, key: Vec<u8>) -> anyhow::Result<()> {
         let hash = Self::_compute_cumulative_hash(&self.metadata.borrow().parent_hash, &key, &[]);
-        let entry = KvEntry::new(
+        let entry = LedgerEntry::new(
             label.clone(),
             key.clone(),
             Vec::new(),
@@ -279,7 +279,7 @@ impl LedgerKV {
         self
     }
 
-    pub fn iter(&self, label: Option<EntryLabel>) -> impl Iterator<Item = &KvEntry> {
+    pub fn iter(&self, label: Option<EntryLabel>) -> impl Iterator<Item = &LedgerEntry> {
         self.entries
             .iter()
             .filter(|(entry_label, _entry)| match &label {
@@ -338,7 +338,7 @@ mod tests {
         let entries = ledger_kv.entries.get(&EntryLabel::Unspecified).unwrap();
         assert_eq!(
             entries.get(&key),
-            Some(&KvEntry::new(
+            Some(&LedgerEntry::new(
                 EntryLabel::Unspecified,
                 key,
                 value,
@@ -362,7 +362,7 @@ mod tests {
         let entries = ledger_kv.entries.get(&EntryLabel::NodeProvider).unwrap();
         assert_eq!(
             entries.get(&key),
-            Some(&KvEntry::new(
+            Some(&LedgerEntry::new(
                 EntryLabel::NodeProvider,
                 key.clone(),
                 value.clone(),
@@ -423,7 +423,7 @@ mod tests {
         let entries_np = ledger_kv.entries.get(&EntryLabel::NodeProvider).unwrap();
         assert_eq!(
             entries_np.get(&key),
-            Some(&KvEntry::new(
+            Some(&LedgerEntry::new(
                 EntryLabel::NodeProvider,
                 key.clone(),
                 value.clone(),
@@ -468,7 +468,7 @@ mod tests {
         ];
         ledger_kv = ledger_kv.refresh_ledger();
 
-        let entry: KvEntry = ledger_kv
+        let entry: LedgerEntry = ledger_kv
             .entries
             .get(&EntryLabel::Unspecified)
             .unwrap()
@@ -478,7 +478,7 @@ mod tests {
             .clone();
         assert_eq!(
             entry,
-            KvEntry {
+            LedgerEntry {
                 label: EntryLabel::Unspecified,
                 key: key,
                 value: value,

@@ -14,9 +14,9 @@ pub enum Operation {
     Delete,
 }
 
-/// Struct representing a key-value entry.
+/// Struct representing an entry stored for a particular key in the key-value store.
 #[derive(BorshSerialize, BorshDeserialize, Clone, PartialEq, Eq, Debug)]
-pub struct KvEntry {
+pub struct LedgerEntry {
     pub label: EntryLabel,
     pub key: Vec<u8>,
     pub value: Vec<u8>,
@@ -25,8 +25,8 @@ pub struct KvEntry {
     pub(crate) hash: Vec<u8>,
 }
 
-impl KvEntry {
-    /// Creates a new `KvEntry` instance.
+impl LedgerEntry {
+    /// Creates a new `LedgerEntry` instance.
     ///
     /// # Arguments
     ///
@@ -39,7 +39,7 @@ impl KvEntry {
     ///
     /// # Returns
     ///
-    /// A new `KvEntry` instance.
+    /// A new `LedgerEntry` instance.
     pub fn new(
         label: EntryLabel,
         key: Vec<u8>,
@@ -48,7 +48,7 @@ impl KvEntry {
         entry_offset: usize,
         hash: Vec<u8>,
     ) -> Self {
-        KvEntry {
+        LedgerEntry {
             label,
             key,
             value,
@@ -59,8 +59,8 @@ impl KvEntry {
     }
 }
 
-/// Implements the `Display` trait for `KvEntry`.
-impl std::fmt::Display for KvEntry {
+/// Implements the `Display` trait for `LedgerEntry`.
+impl std::fmt::Display for LedgerEntry {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         if let Ok(key) = String::from_utf8(self.key.to_owned()) {
             if let Ok(value) = String::from_utf8(self.value.to_owned()) {
