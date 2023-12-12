@@ -1,4 +1,4 @@
-use super::kv_entry::KvEntry;
+use super::ledger_entry::LedgerEntry;
 use borsh::BorshDeserialize;
 use fs_err as fs;
 use fs_err::{File, OpenOptions};
@@ -78,7 +78,7 @@ impl DataBackend {
         self.file_path.exists()
     }
 
-    pub fn iter_raw(&self, num_entries: usize) -> impl Iterator<Item = KvEntry> + '_ {
+    pub fn iter_raw(&self, num_entries: usize) -> impl Iterator<Item = LedgerEntry> + '_ {
         let file = OpenOptions::new()
             .read(true)
             .write(true)
@@ -105,7 +105,7 @@ impl DataBackend {
             slice_begin = cursor.position() as usize + size_of_usize;
             let mut slice = &cursor.get_ref()[slice_begin..];
 
-            let entry = match KvEntry::deserialize(&mut slice) {
+            let entry = match LedgerEntry::deserialize(&mut slice) {
                 Ok(entry) => entry,
                 Err(_) => panic!("Deserialize error"),
             };
