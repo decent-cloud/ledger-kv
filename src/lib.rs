@@ -34,6 +34,8 @@
 //! let key = b"key".to_vec();
 //! let value = b"value".to_vec();
 //! ledger_kv.upsert(label.clone(), key.clone(), value.clone()).unwrap();
+//! ledger_kv.upsert(label.clone(), b"key2".to_vec(), b"value2".to_vec()).unwrap();
+//! ledger_kv.commit_block().unwrap();
 //!
 //! // Retrieve all entries
 //! let entries = ledger_kv.iter(None).collect::<Vec<_>>();
@@ -41,6 +43,7 @@
 //!
 //! // Delete an entry
 //! ledger_kv.delete(label, key).unwrap();
+//! ledger_kv.commit_block().unwrap();
 //! ```
 
 pub mod ledger_entry;
