@@ -14,7 +14,7 @@ Add LedgerKV to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-ledger-kv = "0.1.0"
+ledger-kv = "0.1.1"
 ```
 
 ## Usage
@@ -22,24 +22,34 @@ ledger-kv = "0.1.0"
 Here is a basic example to get you started:
 
 ```rust
-use ledger_kv::LedgerKV;  // Replace with your actual library name
-use ledger_kv::EntryLabel;
-use ledger_kv::Operation;
+use std::path::PathBuf;
+use ledger_kv::{LedgerKV, EntryLabel, Operation};
+use ledger_kv::data_store::{DataBackend, MetadataBackend};
 
-let data_dir = PathBuf::from("/tmp/data/");
-let description = "example_ledger";
+fn main() {
+  let file_path = PathBuf::from("/tmp/ledger_kv/test_data.bin");
+  let data_backend = DataBackend::new(file_path.with_extension("bin"));
+  let metadata_backend = MetadataBackend::new(file_path.with_extension("meta"));
 
-// Create a new LedgerKV instance
-let mut ledger = LedgerKV::new(data_dir, description);
+  // Create a new LedgerKV instance
+  let mut ledger_kv = LedgerKV::new(data_backend, metadata_backend).expect("Failed to create LedgerKV");
 
-// Perform an upsert (insert/update) operation
-let key = vec![1, 2, 3];
-let value = vec![4, 5, 6];
-ledger.upsert(EntryLabel::NodeProvider, key, value).unwrap();
+  // Insert a new entry
+  let label = EntryLabel::Unspecified;
+  let key = b"key".to_vec();
+  let value = b"value".to_vec();
+  ledger_kv.upsert(label.clone(), key.clone(), value.clone()).unwrap();
+  ledger_kv.upsert(label.clone(), b"key2".to_vec(), b"value2".to_vec()).unwrap();
+  ledger_kv.commit_block().unwrap();
 
-// Perform a delete operation
-let key = vec![1, 2, 3];
-ledger.delete(EntryLabel::NodeProvider, key).unwrap();
+  // Retrieve all entries
+  let entries = ledger_kv.iter(None).collect::<Vec<_>>();
+  println!("All entries: {:?}", entries);
+
+  // Delete an entry
+  ledger_kv.delete(label, key).unwrap();
+  ledger_kv.commit_block().unwrap();
+}
 ```
 
 ## Features
