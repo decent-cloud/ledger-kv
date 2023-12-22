@@ -56,8 +56,7 @@ pub mod data_store_native;
 pub use data_store_native as data_store;
 
 use ahash::AHashMap;
-use borsh::{from_slice, to_vec};
-use borsh_derive::{BorshDeserialize, BorshSerialize};
+use borsh::{from_slice, to_vec, BorshDeserialize, BorshSerialize};
 use data_store::{DataBackend, MetadataBackend};
 use indexmap::IndexMap;
 pub use ledger_entry::{EntryLabel, Key, LedgerBlock, LedgerEntry, Operation, Value};
