@@ -14,15 +14,16 @@ pub enum Operation {
     Delete,
 }
 
+pub type Key = Vec<u8>;
+pub type Value = Vec<u8>;
+
 /// Struct representing an entry stored for a particular key in the key-value store.
 #[derive(BorshSerialize, BorshDeserialize, Clone, PartialEq, Eq, Debug)]
 pub struct LedgerEntry {
     pub label: EntryLabel,
-    pub key: Vec<u8>,
-    pub value: Vec<u8>,
+    pub key: Key,
+    pub value: Value,
     pub operation: Operation,
-    pub(crate) entry_offset: usize,
-    pub(crate) hash: Vec<u8>,
 }
 
 impl LedgerEntry {
@@ -34,27 +35,16 @@ impl LedgerEntry {
     /// * `key` - The key of the entry.
     /// * `value` - The value of the entry.
     /// * `operation` - The operation to be performed on the entry.
-    /// * `entry_offset` - The offset where the entry starts.
-    /// * `hash` - The hash of the entry.
     ///
     /// # Returns
     ///
     /// A new `LedgerEntry` instance.
-    pub fn new(
-        label: EntryLabel,
-        key: Vec<u8>,
-        value: Vec<u8>,
-        operation: Operation,
-        entry_offset: usize,
-        hash: Vec<u8>,
-    ) -> Self {
+    pub fn new(label: EntryLabel, key: Key, value: Value, operation: Operation) -> Self {
         LedgerEntry {
             label,
             key,
             value,
             operation,
-            entry_offset,
-            hash,
         }
     }
 }
@@ -64,15 +54,42 @@ impl std::fmt::Display for LedgerEntry {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         if let Ok(key) = String::from_utf8(self.key.to_owned()) {
             if let Ok(value) = String::from_utf8(self.value.to_owned()) {
-                return write!(f, "@{} Key: {}, Value: {}", self.entry_offset, key, value);
+                return write!(f, "Key: {}, Value: {}", key, value);
             }
         }
         write!(
             f,
-            "@{} Key: {}, Value: {}",
-            self.entry_offset,
+            "Key: {}, Value: {}",
             String::from_utf8_lossy(&self.key),
             String::from_utf8_lossy(&self.value)
         )
+    }
+}
+
+#[derive(BorshSerialize, BorshDeserialize, Clone, PartialEq, Eq, Debug)]
+pub struct LedgerBlock {
+    pub(crate) entries: Vec<LedgerEntry>,
+    pub(crate) offset: usize,
+    pub(crate) hash: Vec<u8>,
+}
+
+impl LedgerBlock {
+    pub(crate) fn new(entries: Vec<LedgerEntry>, offset: usize, hash: Vec<u8>) -> Self {
+        LedgerBlock {
+            entries,
+            offset,
+            hash,
+        }
+    }
+}
+
+/// Implements the `Display` trait for `LedgerBlock`.
+impl std::fmt::Display for LedgerBlock {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        write!(f, "@{}", self.offset)?;
+        for entry in &self.entries {
+            write!(f, "\n{}", entry)?
+        }
+        write!(f, "\nHash: {}", hex::encode(self.hash.as_slice()))
     }
 }
