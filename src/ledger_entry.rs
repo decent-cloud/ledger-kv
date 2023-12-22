@@ -1,4 +1,4 @@
-use borsh_derive::{BorshDeserialize, BorshSerialize};
+use borsh::{BorshDeserialize, BorshSerialize};
 
 /// Enum defining the different labels for entries.
 #[derive(BorshSerialize, BorshDeserialize, Clone, PartialEq, Eq, Debug, Hash)]
