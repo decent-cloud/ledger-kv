@@ -1,4 +1,4 @@
-use super::ledger_entry::LedgerEntry;
+use super::ledger_entry::LedgerBlock;
 use borsh::BorshDeserialize;
 use fs_err as fs;
 use fs_err::{File, OpenOptions};
@@ -21,7 +21,7 @@ impl MetadataBackend {
 
     pub(crate) fn save_raw_metadata_bytes(&self, metadata_bytes: &[u8]) -> anyhow::Result<()> {
         let mut file = File::create(&self.file_path)?;
-        file.write_all(&metadata_bytes)
+        file.write_all(metadata_bytes)
             .map_err(|e| anyhow::format_err!("Write to file failed: {}", e))
     }
 
@@ -41,7 +41,7 @@ impl MetadataBackend {
                 "Metadata refresh: file {} does not exist",
                 self.file_path.display()
             );
-            return Vec::new();
+            Vec::new()
         }
     }
 }
@@ -68,7 +68,7 @@ impl DataBackend {
             .open(&self.file_path)
             .map_err(|e| anyhow::format_err!("Open file failed: {}", e))?;
 
-        file.write_all(&bytes)
+        file.write_all(bytes)
             .map_err(|e| anyhow::format_err!("Append file failed: {}", e))?;
 
         Ok(file.stream_position()? as usize)
@@ -78,7 +78,7 @@ impl DataBackend {
         self.file_path.exists()
     }
 
-    pub fn iter_raw(&self, num_entries: usize) -> impl Iterator<Item = LedgerEntry> + '_ {
+    pub fn iter_raw(&self, num_blocks: usize) -> impl Iterator<Item = LedgerBlock> + '_ {
         let file = OpenOptions::new()
             .read(true)
             .write(true)
@@ -91,7 +91,7 @@ impl DataBackend {
         // scan is used to build a lazy iterator
         // it gives us a way to maintain state between calls to the iterator
         // (in this case, the Cursor).
-        let iterator = (0..num_entries).scan(cursor, |state, _| {
+        let iterator = (0..num_blocks).scan(cursor, |state, _| {
             let cursor = state;
             let mut slice_begin = cursor.position() as usize;
             let mut slice = &cursor.get_ref()[slice_begin..];
@@ -105,7 +105,7 @@ impl DataBackend {
             slice_begin = cursor.position() as usize + size_of_usize;
             let mut slice = &cursor.get_ref()[slice_begin..];
 
-            let entry = match LedgerEntry::deserialize(&mut slice) {
+            let entry = match LedgerBlock::deserialize(&mut slice) {
                 Ok(entry) => entry,
                 Err(_) => panic!("Deserialize error"),
             };
@@ -134,7 +134,7 @@ mod tests {
     fn test_save() {
         let (file_path, mut metadata) = create_temp_metadata();
 
-        metadata.num_entries = 10;
+        metadata.num_blocks = 10;
         metadata.parent_hash = vec![0, 1, 2, 3];
 
         // Call the save method
@@ -152,7 +152,7 @@ mod tests {
         let deserialized_metadata: Metadata = from_slice::<Metadata>(&metadata_bytes).unwrap();
 
         // Assert that the deserialized metadata matches the original metadata
-        assert_eq!(deserialized_metadata.num_entries, 10);
+        assert_eq!(deserialized_metadata.num_blocks, 10);
         assert_eq!(deserialized_metadata.parent_hash, vec![0, 1, 2, 3]);
     }
 
@@ -169,7 +169,7 @@ mod tests {
         metadata.refresh();
 
         // Assert that the metadata fields are correctly refreshed
-        assert_eq!(metadata.num_entries, 0);
+        assert_eq!(metadata.num_blocks, 0);
         assert_eq!(metadata.parent_hash, Vec::new());
     }
 
