@@ -1,6 +1,6 @@
 /// This file contains the implementation of a command-line interface (CLI) for interacting with the LedgerKV library.
 ///
-/// The CLI allows users to perform various operations on a ledger, such as listing entries, adding key-value pairs, and deleting entries.
+/// The CLI allows various ledger operations, such as listing, adding, and deleting entries.
 ///
 use ledger_kv::data_store;
 
@@ -74,7 +74,8 @@ fn main() -> anyhow::Result<()> {
     let file_path = data_dir.join("ledger_store");
     let data_backend = DataBackend::new(file_path.with_extension("bin"));
     let metadata_backend = MetadataBackend::new(file_path.with_extension("meta"));
-    let mut ledger_kv = LedgerKV::new(data_backend, metadata_backend);
+    let mut ledger_kv =
+        LedgerKV::new(data_backend, metadata_backend).expect("Failed to create ledger");
 
     if args.list {
         println!("Listing entries:");
