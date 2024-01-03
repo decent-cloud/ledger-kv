@@ -1,12 +1,5 @@
 use borsh::{BorshDeserialize, BorshSerialize};
 
-/// Enum defining the different labels for entries.
-#[derive(BorshSerialize, BorshDeserialize, Clone, PartialEq, Eq, Debug, Hash)]
-pub enum EntryLabel {
-    Unspecified,
-    NodeProvider,
-}
-
 /// Enum defining the different operations that can be performed on entries.
 #[derive(BorshSerialize, BorshDeserialize, Clone, PartialEq, Eq, Debug)]
 pub enum Operation {
@@ -19,14 +12,14 @@ pub type Value = Vec<u8>;
 
 /// Struct representing an entry stored for a particular key in the key-value store.
 #[derive(BorshSerialize, BorshDeserialize, Clone, PartialEq, Eq, Debug)]
-pub struct LedgerEntry {
-    pub label: EntryLabel,
+pub struct LedgerEntry<TL> {
+    pub label: TL,
     pub key: Key,
     pub value: Value,
     pub operation: Operation,
 }
 
-impl LedgerEntry {
+impl<TL> LedgerEntry<TL> {
     /// Creates a new `LedgerEntry` instance.
     ///
     /// # Arguments
@@ -39,7 +32,7 @@ impl LedgerEntry {
     /// # Returns
     ///
     /// A new `LedgerEntry` instance.
-    pub fn new(label: EntryLabel, key: Key, value: Value, operation: Operation) -> Self {
+    pub fn new(label: TL, key: Key, value: Value, operation: Operation) -> Self {
         LedgerEntry {
             label,
             key,
@@ -50,7 +43,7 @@ impl LedgerEntry {
 }
 
 /// Implements the `Display` trait for `LedgerEntry`.
-impl std::fmt::Display for LedgerEntry {
+impl<TL> std::fmt::Display for LedgerEntry<TL> {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         if let Ok(key) = String::from_utf8(self.key.to_owned()) {
             if let Ok(value) = String::from_utf8(self.value.to_owned()) {
@@ -67,14 +60,14 @@ impl std::fmt::Display for LedgerEntry {
 }
 
 #[derive(BorshSerialize, BorshDeserialize, Clone, PartialEq, Eq, Debug)]
-pub struct LedgerBlock {
-    pub(crate) entries: Vec<LedgerEntry>,
+pub struct LedgerBlock<TL> {
+    pub(crate) entries: Vec<LedgerEntry<TL>>,
     pub(crate) offset: usize,
     pub(crate) hash: Vec<u8>,
 }
 
-impl LedgerBlock {
-    pub(crate) fn new(entries: Vec<LedgerEntry>, offset: usize, hash: Vec<u8>) -> Self {
+impl<TL> LedgerBlock<TL> {
+    pub(crate) fn new(entries: Vec<LedgerEntry<TL>>, offset: usize, hash: Vec<u8>) -> Self {
         LedgerBlock {
             entries,
             offset,
@@ -84,7 +77,7 @@ impl LedgerBlock {
 }
 
 /// Implements the `Display` trait for `LedgerBlock`.
-impl std::fmt::Display for LedgerBlock {
+impl<TL> std::fmt::Display for LedgerBlock<TL> {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         write!(f, "@{}", self.offset)?;
         for entry in &self.entries {
