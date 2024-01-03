@@ -1,4 +1,3 @@
-use super::ledger_entry::LedgerBlock;
 use borsh::BorshDeserialize;
 use fs_err as fs;
 use fs_err::{File, OpenOptions};
@@ -78,7 +77,7 @@ impl DataBackend {
         self.file_path.exists()
     }
 
-    pub fn iter_raw(&self, num_blocks: usize) -> impl Iterator<Item = LedgerBlock> + '_ {
+    pub fn iter_raw(&self, num_blocks: usize) -> impl Iterator<Item = Vec<u8>> + '_ {
         let file = OpenOptions::new()
             .read(true)
             .write(true)
@@ -103,12 +102,8 @@ impl DataBackend {
 
             let size_of_usize = std::mem::size_of_val(&entry_len_bytes);
             slice_begin = cursor.position() as usize + size_of_usize;
-            let mut slice = &cursor.get_ref()[slice_begin..];
-
-            let entry = match LedgerBlock::deserialize(&mut slice) {
-                Ok(entry) => entry,
-                Err(_) => panic!("Deserialize error"),
-            };
+            let slice = &cursor.get_ref()[slice_begin..];
+            let entry = slice.to_vec();
 
             let seek_offset = size_of_usize + entry_len_bytes;
             cursor
@@ -162,7 +157,7 @@ mod tests {
 
         // Write some metadata bytes to the file
         let serialized_metadata: Vec<u8> = to_vec(&metadata).unwrap();
-        let mut file = File::create(&file_path).unwrap();
+        let mut file = File::create(file_path).unwrap();
         file.write_all(&serialized_metadata).unwrap();
 
         // Call the refresh method

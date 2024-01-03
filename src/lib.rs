@@ -19,8 +19,16 @@
 //!
 //! ```rust
 //! use std::path::PathBuf;
-//! use ledger_kv::{LedgerKV, EntryLabel, Operation};
+//! use ledger_kv::{LedgerKV, Operation};
 //! use ledger_kv::data_store::{DataBackend, MetadataBackend};
+//! use borsh::{BorshDeserialize, BorshSerialize};
+//!
+//! /// Enum defining the different labels for entries.
+//! #[derive(BorshSerialize, BorshDeserialize, Clone, PartialEq, Eq, Debug, Hash)]
+//! pub enum EntryLabel {
+//!     Unspecified,
+//!     SomeLabel,
+//! }
 //!
 //! let file_path = PathBuf::from("/tmp/ledger_kv/test_data.bin");
 //! let data_backend = DataBackend::new(file_path.with_extension("bin"));
@@ -62,10 +70,10 @@ use ahash::AHashMap;
 use borsh::{from_slice, to_vec, BorshDeserialize, BorshSerialize};
 use data_store::{DataBackend, MetadataBackend};
 use indexmap::IndexMap;
-pub use ledger_entry::{EntryLabel, Key, LedgerBlock, LedgerEntry, Operation, Value};
+pub use ledger_entry::{Key, LedgerBlock, LedgerEntry, Operation, Value};
 use log::{info, warn};
 use sha2::{Digest, Sha256};
-use std::cell::RefCell;
+use std::{cell::RefCell, fmt::Debug};
 
 /// Struct representing the metadata of the ledger.
 #[derive(BorshSerialize, BorshDeserialize, Clone, Debug)]
@@ -111,14 +119,10 @@ impl Metadata {
         );
     }
 
-    fn append_entries(
-        &mut self,
-        ledger_block: &LedgerBlock,
-        position: usize,
-    ) -> anyhow::Result<()> {
+    fn append_entries(&mut self, parent_hash: &[u8], position: usize) -> anyhow::Result<()> {
         // let md: &mut Metadata = &mut *self.borrow_mut();
         self.num_blocks += 1;
-        self.parent_hash = ledger_block.hash.clone();
+        self.parent_hash = parent_hash.to_vec();
         self.last_offset = position;
         let metadata_bytes = to_vec(self).expect("Failed to serialize metadata");
         self.metadata_backend
@@ -133,15 +137,18 @@ impl Metadata {
 }
 
 /// Struct representing the LedgerKV.
-pub struct LedgerKV {
+pub struct LedgerKV<TL> {
     data_backend: DataBackend,
     metadata: RefCell<Metadata>,
-    entries_current_block: IndexMap<Key, LedgerEntry>,
-    entries: AHashMap<EntryLabel, IndexMap<Key, LedgerEntry>>,
+    entries_current_block: IndexMap<Key, LedgerEntry<TL>>,
+    entries: AHashMap<TL, IndexMap<Key, LedgerEntry<TL>>>,
     entry_hash2offset: IndexMap<Key, usize>,
 }
 
-impl LedgerKV {
+impl<TL> LedgerKV<TL>
+where
+    TL: Debug + BorshSerialize + BorshDeserialize + Clone + Eq + std::hash::Hash,
+{
     pub fn new(
         data_backend: DataBackend,
         metadata_backend: MetadataBackend,
@@ -158,7 +165,7 @@ impl LedgerKV {
 
     fn _compute_cumulative_hash(
         parent_hash: &[u8],
-        block_entries: &[LedgerEntry],
+        block_entries: &[LedgerEntry<TL>],
     ) -> anyhow::Result<Vec<u8>> {
         let mut hasher = Sha256::new();
         hasher.update(parent_hash);
@@ -168,7 +175,7 @@ impl LedgerKV {
         Ok(hasher.finalize().to_vec())
     }
 
-    fn _journal_append_kv_entry(&self, ledger_block: LedgerBlock) -> anyhow::Result<()> {
+    fn _journal_append_kv_entry(&self, ledger_block: LedgerBlock<TL>) -> anyhow::Result<()> {
         // Prepare entry as serialized bytes
         let serialized_data = to_vec(&ledger_block)?;
         // Prepare entry len, as bytes
@@ -181,7 +188,7 @@ impl LedgerKV {
         println!("Entry hash: {:?}", ledger_block.hash);
         self.metadata
             .borrow_mut()
-            .append_entries(&ledger_block, position)
+            .append_entries(&ledger_block.hash, position)
     }
 
     pub fn begin_block(&mut self) -> anyhow::Result<()> {
@@ -206,7 +213,7 @@ impl LedgerKV {
         Ok(())
     }
 
-    pub fn upsert(&mut self, label: EntryLabel, key: Key, value: Value) -> anyhow::Result<()> {
+    pub fn upsert(&mut self, label: TL, key: Key, value: Value) -> anyhow::Result<()> {
         let entry = LedgerEntry::new(label.clone(), key.clone(), value.clone(), Operation::Upsert);
 
         self.entries_current_block
@@ -226,7 +233,7 @@ impl LedgerKV {
         Ok(())
     }
 
-    pub fn delete(&mut self, label: EntryLabel, key: Key) -> anyhow::Result<()> {
+    pub fn delete(&mut self, label: TL, key: Key) -> anyhow::Result<()> {
         let entry = LedgerEntry::new(label.clone(), key.clone(), Vec::new(), Operation::Delete);
 
         self.entries_current_block.insert(key.clone(), entry);
@@ -243,7 +250,7 @@ impl LedgerKV {
         Ok(())
     }
 
-    pub fn refresh_ledger(mut self) -> anyhow::Result<LedgerKV> {
+    pub fn refresh_ledger(mut self) -> anyhow::Result<LedgerKV<TL>> {
         self.entries.clear();
         self.entry_hash2offset.clear();
         self.metadata.borrow_mut().refresh();
@@ -260,7 +267,12 @@ impl LedgerKV {
         info!("Num blocks: {}", self.metadata.borrow().num_blocks);
 
         let mut parent_hash = Vec::new();
-        for ledger_block in self.data_backend.iter_raw(num_blocks).collect::<Vec<_>>() {
+        for ledger_block_raw in self.data_backend.iter_raw(num_blocks).collect::<Vec<_>>() {
+            let ledger_block = match LedgerBlock::deserialize(&mut ledger_block_raw.as_slice()) {
+                Ok(entry) => entry,
+                Err(_) => panic!("Deserialize error"),
+            };
+
             // Update the in-memory IndexMap of entries, used for quick lookups
             let expected_hash =
                 Self::_compute_cumulative_hash(&parent_hash, &ledger_block.entries)?;
@@ -296,7 +308,7 @@ impl LedgerKV {
         Ok(self)
     }
 
-    pub fn iter(&self, label: Option<EntryLabel>) -> impl Iterator<Item = &LedgerEntry> {
+    pub fn iter(&self, label: Option<TL>) -> impl Iterator<Item = &LedgerEntry<TL>> {
         self.entries
             .iter()
             .filter(|(entry_label, _entry)| match &label {
@@ -314,7 +326,17 @@ impl LedgerKV {
 mod tests {
     use super::*;
 
-    fn new_temp_ledger() -> LedgerKV {
+    /// Enum defining the different labels for entries.
+    #[derive(BorshSerialize, BorshDeserialize, Clone, PartialEq, Eq, Debug, Hash)]
+    pub enum EntryLabel {
+        Unspecified,
+        NodeProvider,
+    }
+
+    fn new_temp_ledger<TL>() -> LedgerKV<TL>
+    where
+        TL: BorshSerialize + BorshDeserialize + Clone + PartialEq + Eq + Debug + std::hash::Hash,
+    {
         // Create a temporary directory for the test
         let file_path = tempfile::tempdir()
             .unwrap()
@@ -492,7 +514,7 @@ mod tests {
         ];
         ledger_kv = ledger_kv.refresh_ledger().unwrap();
 
-        let entry: LedgerEntry = ledger_kv
+        let entry = ledger_kv
             .entries
             .get(&EntryLabel::Unspecified)
             .unwrap()
@@ -504,8 +526,8 @@ mod tests {
             entry,
             LedgerEntry {
                 label: EntryLabel::Unspecified,
-                key: key,
-                value: value,
+                key,
+                value,
                 operation: Operation::Upsert,
             }
         );

@@ -4,10 +4,11 @@
 ///
 use ledger_kv::data_store;
 
+use borsh::{BorshDeserialize, BorshSerialize};
 use data_store::{DataBackend, MetadataBackend};
 
 use clap::{arg, Arg, Command};
-use ledger_kv::{EntryLabel, LedgerKV};
+use ledger_kv::LedgerKV;
 use std::path::PathBuf;
 use std::str::FromStr;
 
@@ -59,6 +60,12 @@ fn parse_args() -> ParsedArgs {
         delete,
         directory,
     }
+}
+
+#[derive(BorshSerialize, BorshDeserialize, Clone, PartialEq, Eq, Debug, Hash)]
+pub enum EntryLabel {
+    Unspecified,
+    NodeProvider,
 }
 
 fn main() -> anyhow::Result<()> {
