@@ -1,6 +1,6 @@
 /// This file contains the implementation of a command-line interface (CLI) for interacting with the LedgerKV library.
 ///
-/// The CLI allows various ledger operations, such as listing, adding, and deleting entries.
+/// The CLI allows various ledger operations, such as listing, inserting/updating (upserting), and deleting entries.
 ///
 use ledger_kv::data_store;
 
@@ -15,7 +15,7 @@ use std::str::FromStr;
 /// Struct to hold the parsed command-line arguments
 struct ParsedArgs {
     list: bool,
-    add: Option<(String, String)>,
+    upsert: Option<(String, String)>,
     delete: Option<String>,
     directory: Option<String>,
 }
@@ -26,9 +26,9 @@ fn parse_args() -> ParsedArgs {
         .about("LedgerKV CLI")
         .arg(arg!(--list "List entries").required(false))
         .arg(
-            Arg::new("add")
-                .long("add")
-                .help("Add key-value pair")
+            Arg::new("upsert")
+                .long("upsert")
+                .help("Upsert key-value pair")
                 .num_args(2),
         )
         .arg(arg!(--delete <KEY> "Delete key").required(false))
@@ -41,7 +41,7 @@ fn parse_args() -> ParsedArgs {
 
     let list = *matches.get_one::<bool>("list").unwrap_or(&false);
 
-    let add = matches.get_many::<String>("add").map(|mut values| {
+    let upsert = matches.get_many::<String>("upsert").map(|mut values| {
         (
             values.next().unwrap().to_string(),
             values.next().unwrap().to_string(),
@@ -56,7 +56,7 @@ fn parse_args() -> ParsedArgs {
 
     ParsedArgs {
         list,
-        add,
+        upsert,
         delete,
         directory,
     }
@@ -96,14 +96,14 @@ fn main() -> anyhow::Result<()> {
         }
     }
 
-    if let Some((key, value)) = args.add {
-        // Add or update an entry in the ledger
+    if let Some((key, value)) = args.upsert {
+        // Upsert (insert/update) an entry in the ledger
         ledger_kv.upsert(
             EntryLabel::Unspecified,
             key.as_bytes().to_vec(),
             value.as_bytes().to_vec(),
         )?;
-        println!("Add entry with KEY: {}, VALUE: {}", key, value);
+        println!("Upsert entry with KEY: {}, VALUE: {}", key, value);
     }
 
     if let Some(key) = args.delete {
