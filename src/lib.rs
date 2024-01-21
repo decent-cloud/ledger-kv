@@ -13,14 +13,13 @@
 //! ensuring data integrity.
 //!
 //! The LedgerKV struct provides methods for inserting and deleting entries, as well as iterating over the entries
-//! by label or in raw form. It also supports refreshing the in-memory index and metadata from the binary file.
+//! by label or in raw form. It also supports re-reading the in-memory index and metadata from the binary file.
 //!
 //! Example usage:
 //!
 //! ```rust
 //! use std::path::PathBuf;
 //! use ledger_kv::{LedgerKV, Operation};
-//! use ledger_kv::data_store::{DataBackend, MetadataBackend};
 //! use borsh::{BorshDeserialize, BorshSerialize};
 //!
 //! /// Enum defining the different labels for entries.
@@ -31,11 +30,9 @@
 //! }
 //!
 //! let file_path = PathBuf::from("/tmp/ledger_kv/test_data.bin");
-//! let data_backend = DataBackend::new(file_path.with_extension("bin"));
-//! let metadata_backend = MetadataBackend::new(file_path.with_extension("meta"));
 //!
 //! // Create a new LedgerKV instance
-//! let mut ledger_kv = LedgerKV::new(data_backend, metadata_backend).expect("Failed to create LedgerKV");
+//! let mut ledger_kv = LedgerKV::new().expect("Failed to create LedgerKV");
 //!
 //! // Insert a new entry
 //! let label = EntryLabel::Unspecified;
@@ -54,93 +51,124 @@
 //! ledger_kv.commit_block().unwrap();
 //! ```
 
+#[cfg(target_arch = "wasm32")]
+pub mod platform_specific_wasm32;
+#[cfg(target_arch = "wasm32")]
+pub use platform_specific_wasm32 as platform_specific;
+
+#[cfg(target_arch = "x86_64")]
+pub mod platform_specific_x86_64;
+#[cfg(target_arch = "x86_64")]
+pub use platform_specific_x86_64 as platform_specific;
+
 pub mod ledger_entry;
+pub mod partition_table;
 
-#[cfg(target_arch = "wasm32")]
-pub mod data_store_wasm32;
-#[cfg(target_arch = "wasm32")]
-pub use data_store_wasm32 as data_store;
-
-#[cfg(not(target_arch = "wasm32"))]
-pub mod data_store_native;
-#[cfg(not(target_arch = "wasm32"))]
-pub use data_store_native as data_store;
-
+use crate::platform_specific::{persistent_storage_read64, persistent_storage_write64};
 use ahash::AHashMap;
-use borsh::{from_slice, to_vec, BorshDeserialize, BorshSerialize};
-use data_store::{DataBackend, MetadataBackend};
+use borsh::{to_vec, BorshDeserialize, BorshSerialize};
 use indexmap::IndexMap;
 pub use ledger_entry::{Key, LedgerBlock, LedgerEntry, Operation, Value};
-use log::{info, warn};
+use platform_specific::{info, persistent_storage_ready, warn};
 use sha2::{Digest, Sha256};
 use std::{cell::RefCell, fmt::Debug};
 
 /// Struct representing the metadata of the ledger.
 #[derive(BorshSerialize, BorshDeserialize, Clone, Debug)]
 pub(crate) struct Metadata {
-    #[borsh(skip)]
-    pub(crate) metadata_backend: MetadataBackend,
     /// The number of entries in the ledger.
     pub(crate) num_blocks: usize,
     /// The last offset in the file.
-    pub(crate) last_offset: usize,
+    pub(crate) next_write_position: usize,
     /// The hash of the parent metadata.
     pub(crate) parent_hash: Vec<u8>,
 }
 
-impl Metadata {
-    pub fn new(metadata_backend: MetadataBackend) -> Self {
+impl Default for Metadata {
+    fn default() -> Self {
+        info!(
+            "next_write_position: {}",
+            partition_table::get_data_partition().start_lba
+        );
         Metadata {
-            metadata_backend,
             num_blocks: 0,
-            last_offset: 0,
+            next_write_position: partition_table::get_data_partition().start_lba as usize,
             parent_hash: Vec::new(),
         }
     }
+}
 
-    /// Refreshes the metadata by reading from the file.
-    fn refresh(&mut self) {
-        let metadata_bytes = self.metadata_backend.read_raw_metadata_bytes();
+impl Metadata {
+    pub fn new() -> Self {
+        Metadata::default()
+    }
+
+    pub fn clear(&mut self) {
+        self.num_blocks = 0;
+        self.next_write_position = partition_table::get_data_partition().start_lba as usize;
+        self.parent_hash = Vec::new();
+    }
+
+    /// Refreshes (re-reads) the metadata by reading from the persistent storage.
+    fn update_from_persistent_storage(&mut self) -> anyhow::Result<()> {
+        let metadata_bytes = self._read_raw_metadata_bytes()?;
 
         if metadata_bytes.is_empty() {
             self.num_blocks = 0;
-            self.last_offset = 0;
+            self.next_write_position = partition_table::get_data_partition().start_lba as usize;
             self.parent_hash = Vec::new();
         } else {
-            let deserialized_metadata: Metadata = from_slice::<Metadata>(&metadata_bytes).unwrap();
+            let deserialized_metadata: Metadata =
+                Metadata::deserialize(&mut metadata_bytes.as_ref()).unwrap();
             self.num_blocks = deserialized_metadata.num_blocks;
-            self.last_offset = deserialized_metadata.last_offset;
+            self.next_write_position = deserialized_metadata.next_write_position;
             self.parent_hash = deserialized_metadata.parent_hash;
         }
 
         info!(
-            "Read metadata of num_blocks {} last_offset {}",
-            self.num_blocks, self.last_offset
+            "Read metadata of num_blocks {} next_write_position {}",
+            self.num_blocks, self.next_write_position
         );
+        Ok(())
     }
 
     fn append_entries(&mut self, parent_hash: &[u8], position: usize) -> anyhow::Result<()> {
         // let md: &mut Metadata = &mut *self.borrow_mut();
         self.num_blocks += 1;
         self.parent_hash = parent_hash.to_vec();
-        self.last_offset = position;
+        self.next_write_position = position;
         let metadata_bytes = to_vec(self).expect("Failed to serialize metadata");
-        self.metadata_backend
-            .save_raw_metadata_bytes(&metadata_bytes)?;
-        self.refresh();
-        Ok(())
+        self._save_raw_metadata_bytes(&metadata_bytes)?;
+        self.update_from_persistent_storage()
     }
 
     fn get_parent_hash(&self) -> &[u8] {
         self.parent_hash.as_slice()
     }
+
+    fn _read_raw_metadata_bytes(&self) -> anyhow::Result<Vec<u8>> {
+        let part_entry = partition_table::get_metadata_partition();
+        let mut buf = [0u8; std::mem::size_of::<Metadata>() * 2];
+        persistent_storage_read64(part_entry.start_lba, &mut buf)?;
+        Ok(buf.to_vec())
+    }
+
+    fn _save_raw_metadata_bytes(&self, metadata_bytes: &[u8]) -> anyhow::Result<()> {
+        let part_entry = partition_table::get_metadata_partition();
+        info!(
+            "Saving metadata to {} bytes at offset {}",
+            metadata_bytes.len(),
+            part_entry.start_lba
+        );
+        persistent_storage_write64(part_entry.start_lba, metadata_bytes);
+        Ok(())
+    }
 }
 
-/// Struct representing the LedgerKV.
+#[derive(Debug)]
 pub struct LedgerKV<TL> {
-    data_backend: DataBackend,
     metadata: RefCell<Metadata>,
-    entries_current_block: IndexMap<Key, LedgerEntry<TL>>,
+    entries_next_block: IndexMap<Key, LedgerEntry<TL>>,
     entries: AHashMap<TL, IndexMap<Key, LedgerEntry<TL>>>,
     entry_hash2offset: IndexMap<Key, usize>,
 }
@@ -149,14 +177,10 @@ impl<TL> LedgerKV<TL>
 where
     TL: Debug + BorshSerialize + BorshDeserialize + Clone + Eq + std::hash::Hash,
 {
-    pub fn new(
-        data_backend: DataBackend,
-        metadata_backend: MetadataBackend,
-    ) -> anyhow::Result<Self> {
+    pub fn new() -> anyhow::Result<Self> {
         LedgerKV {
-            data_backend,
-            metadata: RefCell::new(Metadata::new(metadata_backend)),
-            entries_current_block: IndexMap::new(),
+            metadata: RefCell::new(Metadata::new()),
+            entries_next_block: IndexMap::new(),
             entries: AHashMap::new(),
             entry_hash2offset: IndexMap::new(),
         }
@@ -175,40 +199,87 @@ where
         Ok(hasher.finalize().to_vec())
     }
 
-    fn _journal_append_kv_entry(&self, ledger_block: LedgerBlock<TL>) -> anyhow::Result<()> {
+    fn _journal_append_block(&self, ledger_block: LedgerBlock<TL>) -> anyhow::Result<()> {
         // Prepare entry as serialized bytes
         let serialized_data = to_vec(&ledger_block)?;
+        info!(
+            "Appending block with {} bytes: {}",
+            serialized_data.len(),
+            ledger_block,
+        );
         // Prepare entry len, as bytes
-        let entry_len_bytes = serialized_data.len();
-        let serialized_data_len = to_vec(&entry_len_bytes).expect("failed to serialize entry len");
+        let block_len_bytes = serialized_data.len();
+        let serialized_data_len = block_len_bytes.to_le_bytes();
 
-        self.data_backend.append_to_ledger(&serialized_data_len)?;
-        let position = self.data_backend.append_to_ledger(&serialized_data)?;
+        info!(
+            "entry_len_bytes {} serialized_data_len: {:?} serialized_data: {:?}",
+            block_len_bytes, serialized_data_len, serialized_data
+        );
+        persistent_storage_write64(
+            self.metadata.borrow().next_write_position as u64,
+            &serialized_data_len,
+        );
+        persistent_storage_write64(
+            self.metadata.borrow().next_write_position as u64 + serialized_data_len.len() as u64,
+            &serialized_data,
+        );
 
-        println!("Entry hash: {:?}", ledger_block.hash);
+        let next_write_position = self.metadata.borrow().next_write_position
+            + serialized_data_len.len()
+            + serialized_data.len();
         self.metadata
             .borrow_mut()
-            .append_entries(&ledger_block.hash, position)
+            .append_entries(&ledger_block.hash, next_write_position)
+    }
+
+    fn _journal_read_block(&self, offset: u64) -> anyhow::Result<(u64, LedgerBlock<TL>)> {
+        info!("Reading journal block at offset {}", offset);
+
+        // Find out how many bytes we need to read ==> block len in bytes
+        let mut buf = [0u8; std::mem::size_of::<usize>()];
+        persistent_storage_read64(offset, &mut buf)?;
+        let block_len: usize = usize::from_le_bytes(buf);
+        info!("read bytes: {:?}", buf);
+        info!("block_len: {}", block_len);
+
+        // Read the block as raw bytes
+        let mut buf = vec![0u8; block_len];
+        persistent_storage_read64(offset + std::mem::size_of::<usize>() as u64, &mut buf)?;
+        match LedgerBlock::deserialize(&mut buf.as_ref()).map_err(|err| err.into()) {
+            Ok(block) => Ok((
+                offset + std::mem::size_of::<usize>() as u64 + block_len as u64,
+                block,
+            )),
+            Err(err) => Err(err),
+        }
+    }
+
+    pub fn ready(&self) -> bool {
+        persistent_storage_ready()
     }
 
     pub fn begin_block(&mut self) -> anyhow::Result<()> {
-        if !&self.entries_current_block.is_empty() {
+        if !&self.entries_next_block.is_empty() {
             return Err(anyhow::format_err!("There is already an open transaction."));
         } else {
-            self.entries_current_block.clear();
+            self.entries_next_block.clear();
         }
         Ok(())
     }
 
     pub fn commit_block(&self) -> anyhow::Result<()> {
-        if !self.entries_current_block.is_empty() {
-            let block_entries = Vec::from_iter(self.entries_current_block.values().cloned());
+        if !self.entries_next_block.is_empty() {
+            let block_entries = Vec::from_iter(self.entries_next_block.values().cloned());
             let hash = Self::_compute_cumulative_hash(
                 self.metadata.borrow().get_parent_hash(),
                 &block_entries,
             )?;
-            let block = LedgerBlock::new(block_entries, self.metadata.borrow().last_offset, hash);
-            self._journal_append_kv_entry(block)?;
+            let block = LedgerBlock::new(
+                block_entries,
+                self.metadata.borrow().next_write_position,
+                hash,
+            );
+            self._journal_append_block(block)?;
         }
         Ok(())
     }
@@ -216,8 +287,7 @@ where
     pub fn upsert(&mut self, label: TL, key: Key, value: Value) -> anyhow::Result<()> {
         let entry = LedgerEntry::new(label.clone(), key.clone(), value.clone(), Operation::Upsert);
 
-        self.entries_current_block
-            .insert(key.clone(), entry.clone());
+        self.entries_next_block.insert(key.clone(), entry.clone());
 
         match self.entries.get_mut(&label) {
             Some(entries) => {
@@ -236,7 +306,7 @@ where
     pub fn delete(&mut self, label: TL, key: Key) -> anyhow::Result<()> {
         let entry = LedgerEntry::new(label.clone(), key.clone(), Vec::new(), Operation::Delete);
 
-        self.entries_current_block.insert(key.clone(), entry);
+        self.entries_next_block.insert(key.clone(), entry);
 
         match self.entries.get_mut(&label) {
             Some(entries) => {
@@ -251,28 +321,28 @@ where
     }
 
     pub fn refresh_ledger(mut self) -> anyhow::Result<LedgerKV<TL>> {
+        self.metadata.borrow_mut().clear();
         self.entries.clear();
         self.entry_hash2offset.clear();
-        self.metadata.borrow_mut().refresh();
 
         // If the backend is not ready (e.g. the backing file does not exist), just return
-        if !self.data_backend.ready() {
-            return Err(anyhow::Error::msg("Backend not ready"));
+        if !self.ready() {
+            warn!("Backend not ready");
+            return Ok(self);
         }
 
         let mut entries_hash2offset = IndexMap::new();
 
-        self.metadata.borrow_mut().refresh();
+        self.metadata
+            .borrow_mut()
+            .update_from_persistent_storage()?;
         let num_blocks = self.metadata.borrow().num_blocks;
         info!("Num blocks: {}", self.metadata.borrow().num_blocks);
 
         let mut parent_hash = Vec::new();
-        for ledger_block_raw in self.data_backend.iter_raw(num_blocks).collect::<Vec<_>>() {
-            let ledger_block = match LedgerBlock::deserialize(&mut ledger_block_raw.as_slice()) {
-                Ok(entry) => entry,
-                Err(_) => panic!("Deserialize error"),
-            };
-
+        let mut updates = Vec::new();
+        // Step 1: Read all Ledger Blocks
+        for ledger_block in self.iter_raw(num_blocks) {
             // Update the in-memory IndexMap of entries, used for quick lookups
             let expected_hash =
                 Self::_compute_cumulative_hash(&parent_hash, &ledger_block.entries)?;
@@ -281,6 +351,11 @@ where
             parent_hash.clear();
             parent_hash.extend_from_slice(&ledger_block.hash);
 
+            updates.push(ledger_block);
+        }
+
+        // Step 2: Processing the collected data
+        for ledger_block in updates.into_iter() {
             for ledger_entry in ledger_block.entries.iter() {
                 let entries = match self.entries.get_mut(&ledger_entry.label) {
                     Some(entries) => entries,
@@ -320,11 +395,47 @@ where
             .collect::<Vec<_>>()
             .into_iter()
     }
+
+    pub fn iter_raw(&self, num_blocks: usize) -> impl Iterator<Item = LedgerBlock<TL>> + '_ {
+        let data_start = partition_table::get_data_partition().start_lba;
+        (0..num_blocks).scan(data_start, |state, _| {
+            let (offset_next, ledger_block) = self
+                ._journal_read_block(*state)
+                .expect("Failed to read Ledger block");
+            *state = offset_next;
+            Some(ledger_block)
+        })
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{
+        platform_specific, platform_specific_x86_64::persistent_storage_size_bytes, Metadata,
+    };
+    use borsh::to_vec;
+    fn log_init() {
+        // Set log level to info by default
+        if std::env::var("RUST_LOG").is_err() {
+            std::env::set_var("RUST_LOG", "info");
+        }
+        let _ = env_logger::builder().is_test(true).try_init();
+    }
+
+    fn create_temp_metadata() -> Metadata {
+        log_init();
+        info!("Create temp metadata");
+        // Create a temporary directory for the test
+        let file_path = tempfile::tempdir()
+            .unwrap()
+            .into_path()
+            .join("test_ledger_store.bin");
+        platform_specific::override_backing_file(Some(file_path));
+
+        // Create a Metadata instance
+        Metadata::new()
+    }
 
     /// Enum defining the different labels for entries.
     #[derive(BorshSerialize, BorshDeserialize, Clone, PartialEq, Eq, Debug, Hash)]
@@ -337,15 +448,16 @@ mod tests {
     where
         TL: BorshSerialize + BorshDeserialize + Clone + PartialEq + Eq + Debug + std::hash::Hash,
     {
+        log_init();
+        info!("Create temp ledger");
         // Create a temporary directory for the test
         let file_path = tempfile::tempdir()
             .unwrap()
             .into_path()
-            .join("test_ledger_store");
-        let data_backend = DataBackend::new(file_path.with_extension("bin"));
-        let metadata_backend = MetadataBackend::new(file_path.with_extension("meta"));
-        LedgerKV::new(data_backend, metadata_backend)
-            .expect("Failed to create a temp ledger for the test")
+            .join("test_ledger_store.bin");
+        platform_specific::override_backing_file(Some(file_path));
+        partition_table::persist();
+        LedgerKV::new().expect("Failed to create a temp ledger for the test")
     }
 
     #[test]
@@ -386,6 +498,7 @@ mod tests {
         ledger_kv
             .upsert(EntryLabel::Unspecified, key.clone(), value.clone())
             .unwrap();
+        println!("partition table {}", partition_table::get_partition_table());
         assert!(ledger_kv.commit_block().is_ok());
         let entries = ledger_kv.entries.get(&EntryLabel::Unspecified).unwrap();
         assert_eq!(
@@ -501,6 +614,9 @@ mod tests {
     fn test_refresh_ledger() {
         let mut ledger_kv = new_temp_ledger();
 
+        info!("New temp ledger created");
+        info!("ledger: {:?}", ledger_kv);
+
         // Test refresh_ledger
         let key = vec![1, 2, 3];
         let value = vec![4, 5, 6];
@@ -535,17 +651,35 @@ mod tests {
             ledger_kv.metadata.borrow().parent_hash,
             expected_parent_hash
         );
+    }
 
-        std::fs::remove_file(ledger_kv.data_backend.file_path.clone()).unwrap();
-        std::fs::remove_file(
-            ledger_kv
-                .metadata
-                .borrow()
-                .metadata_backend
-                .file_path
-                .clone(),
-        )
-        .unwrap();
-        assert!(ledger_kv.refresh_ledger().is_err());
+    #[test]
+    fn test_save() {
+        let mut metadata = create_temp_metadata();
+
+        metadata.num_blocks = 10;
+        metadata.parent_hash = vec![0, 1, 2, 3];
+
+        // Call the save method
+        metadata
+            ._save_raw_metadata_bytes(&to_vec(&metadata).unwrap())
+            .unwrap();
+
+        // Read all contents of the metadata partition into a buffer
+        let meta_partition = partition_table::get_metadata_partition();
+        let read_end = meta_partition.end_lba.min(persistent_storage_size_bytes());
+        let mut buf = vec![0u8; (read_end - meta_partition.start_lba) as usize];
+        persistent_storage_read64(meta_partition.start_lba, &mut buf).unwrap();
+
+        // Deserialize the metadata bytes from the buffer
+        let deserialized_metadata: Metadata = Metadata::deserialize(&mut buf.as_slice()).unwrap();
+
+        // Assert that the metadata fields are correctly deserialized
+        assert_eq!(deserialized_metadata.num_blocks, 10);
+        assert_eq!(deserialized_metadata.parent_hash, vec![0, 1, 2, 3]);
+
+        // Assert that the deserialized metadata matches the original metadata
+        assert_eq!(deserialized_metadata.num_blocks, 10);
+        assert_eq!(deserialized_metadata.parent_hash, vec![0, 1, 2, 3]);
     }
 }

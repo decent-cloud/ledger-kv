@@ -24,15 +24,12 @@ Here is a basic example to get you started:
 ```rust
 use std::path::PathBuf;
 use ledger_kv::{LedgerKV, EntryLabel, Operation};
-use ledger_kv::data_store::{DataBackend, MetadataBackend};
 
 fn main() {
   let file_path = PathBuf::from("/tmp/ledger_kv/test_data.bin");
-  let data_backend = DataBackend::new(file_path.with_extension("bin"));
-  let metadata_backend = MetadataBackend::new(file_path.with_extension("meta"));
 
   // Create a new LedgerKV instance
-  let mut ledger_kv = LedgerKV::new(data_backend, metadata_backend).expect("Failed to create LedgerKV");
+  let mut ledger_kv = LedgerKV::new().expect("Failed to create LedgerKV");
 
   // Insert a new entry
   let label = EntryLabel::Unspecified;
