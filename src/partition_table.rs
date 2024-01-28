@@ -1,9 +1,8 @@
 use crate::platform_specific::{
-    persistent_storage_grow64, persistent_storage_read64, persistent_storage_size_bytes,
-    persistent_storage_write64, PERSISTENT_STORAGE_PAGE_SIZE,
+    is_persistent_storage_ready, persistent_storage_grow64, persistent_storage_read64,
+    persistent_storage_size_bytes, persistent_storage_write64, PERSISTENT_STORAGE_PAGE_SIZE,
 };
-use crate::platform_specific_x86_64::persistent_storage_ready;
-use crate::{info, warn};
+use crate::{debug, info, warn};
 use serde::ser::{SerializeStruct, Serializer};
 use serde::Serialize;
 
@@ -187,7 +186,7 @@ impl PartitionTable {
                 "Not enough persistent storage allocated"
             ));
         }
-        if !persistent_storage_ready() {
+        if !is_persistent_storage_ready() {
             return Err(anyhow::format_err!(
                 "Persistent storage not ready".to_string()
             ));
@@ -197,9 +196,10 @@ impl PartitionTable {
         let mut buf = vec![0; Self::size()];
 
         persistent_storage_read64(PARTITION_TABLE_START_OFFSET, buf.as_mut_slice())?;
-        info!(
-            "Read {} bytes of partition table from persistent storage",
-            buf.len()
+        debug!(
+            "Read {} bytes of partition table from persistent storage @ {}",
+            buf.len(),
+            PARTITION_TABLE_START_OFFSET
         );
 
         self.header =
@@ -219,6 +219,7 @@ impl PartitionTable {
                 break;
             }
         }
+        info!("Partition table: {}", self);
 
         Ok(self)
     }
@@ -240,7 +241,11 @@ impl PartitionTable {
         }
 
         persistent_storage_write64(PARTITION_TABLE_START_OFFSET, buf.as_slice());
-        info!("Wrote partition table to persistent storage");
+        info!(
+            "Wrote {} bytes of partition table to persistent storage at LBA {}",
+            buf.len(),
+            PARTITION_TABLE_START_OFFSET
+        );
         Ok(())
     }
 
@@ -302,33 +307,31 @@ impl std::fmt::Display for PartitionTable {
 #[macro_export]
 macro_rules! default_partition_table {
     ( $( $name:ident => $size:expr ),* ) => {
-        thread_local! {
-            pub static PARTITIONS: std::cell::RefCell<$crate::partition_table::PartitionTable> =
-                std::cell::RefCell::new(
-                    match $crate::partition_table::PartitionTable::new().read_from_persistent_storage() {
-                        Ok(partition_table) => {
-                            partition_table
-                        }
-                        Err(err) => {
-                            warn!("Failed to read partition table: {}", err);
-                            let mut _start_lba = PARTITION_TABLE_START_OFFSET;
-                            let mut table = $crate::partition_table::PartitionTable::new();
-                            $(
-                                let mut buffer = [0u8; 16];
-                                let bytes = stringify!($name).as_bytes();
-
-                                // Copy the bytes from the string slice to the buffer
-                                // It copies either the whole string if it's shorter than 16 bytes,
-                                // or the first 16 bytes if it's longer.
-                                buffer[..bytes.len().min(16)].copy_from_slice(&bytes[..16.min(bytes.len())]);
-                                table.add_new_entry($crate::partition_table::PartitionTableEntry::new(buffer, _start_lba, _start_lba + $size)).expect("Failed to add a PartitionTableEntry");
-                                _start_lba += $size;
-                            )*
-                            table.persist().expect("Failed to persist partition table");
-                            table
-                        }
+        lazy_static::lazy_static! {
+            pub static ref PARTITIONS: $crate::partition_table::PartitionTable =
+                match $crate::partition_table::PartitionTable::new().read_from_persistent_storage() {
+                    Ok(partition_table) => {
+                        partition_table
                     }
-            );
+                    Err(err) => {
+                        warn!("Failed to read partition table: {}", err);
+                        let mut _start_lba = PARTITION_TABLE_START_OFFSET;
+                        let mut table = $crate::partition_table::PartitionTable::new();
+                        $(
+                            let mut buffer = [0u8; 16];
+                            let bytes = stringify!($name).as_bytes();
+
+                            // Copy the bytes from the string slice to the buffer
+                            // It copies either the whole string if it's shorter than 16 bytes,
+                            // or the first 16 bytes if it's longer.
+                            buffer[..bytes.len().min(16)].copy_from_slice(&bytes[..16.min(bytes.len())]);
+                            table.add_new_entry($crate::partition_table::PartitionTableEntry::new(buffer, _start_lba, _start_lba + $size)).expect("Failed to add a PartitionTableEntry");
+                            _start_lba += $size;
+                        )*
+                        table.persist().expect("Failed to persist partition table");
+                        table
+                    }
+                };
         }
     };
 }
@@ -344,11 +347,7 @@ pub const PART_METADATA: usize = 1;
 pub const PART_DATA: usize = 2;
 
 fn get_partition_by_num(partnum: usize) -> PartitionTableEntry {
-    PARTITIONS.with(|partitions| {
-        // Borrow the RefCell contents immutably.
-        let partitions = partitions.borrow();
-        partitions.entries[partnum]
-    })
+    PARTITIONS.entries[partnum]
 }
 
 pub fn get_metadata_partition() -> PartitionTableEntry {
@@ -360,9 +359,9 @@ pub fn get_data_partition() -> PartitionTableEntry {
 }
 
 pub fn get_partition_table() -> PartitionTable {
-    PARTITIONS.with(|partitions| partitions.borrow().clone())
+    PARTITIONS.clone()
 }
 
 pub fn persist() {
-    PARTITIONS.with(|partitions| partitions.borrow().persist().unwrap());
+    PARTITIONS.persist().unwrap();
 }

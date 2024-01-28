@@ -108,6 +108,7 @@ fn main() -> anyhow::Result<()> {
             value.as_bytes().to_vec(),
         )?;
         println!("Upsert entry with KEY: {}, VALUE: {}", key, value);
+        ledger_kv.commit_block()?;
     }
 
     if let Some(key) = args.delete {

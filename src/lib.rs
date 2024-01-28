@@ -19,7 +19,7 @@
 //!
 //! ```rust
 //! use std::path::PathBuf;
-//! use ledger_kv::{LedgerKV, Operation};
+//! use ledger_kv::{platform_specific, LedgerKV, Operation};
 //! use borsh::{BorshDeserialize, BorshSerialize};
 //!
 //! /// Enum defining the different labels for entries.
@@ -29,7 +29,9 @@
 //!     SomeLabel,
 //! }
 //!
-//! let file_path = PathBuf::from("/tmp/ledger_kv/test_data.bin");
+//! // Optional: Override the backing file path
+//! // let ledger_path = PathBuf::from("/tmp/ledger_kv/test_data.bin");
+//! // platform_specific::override_backing_file(Some(ledger_path));
 //!
 //! // Create a new LedgerKV instance
 //! let mut ledger_kv = LedgerKV::new().expect("Failed to create LedgerKV");
@@ -54,22 +56,28 @@
 #[cfg(target_arch = "wasm32")]
 pub mod platform_specific_wasm32;
 #[cfg(target_arch = "wasm32")]
+use crate::platform_specific::Sink;
+#[cfg(target_arch = "wasm32")]
 pub use platform_specific_wasm32 as platform_specific;
 
 #[cfg(target_arch = "x86_64")]
 pub mod platform_specific_x86_64;
+#[cfg(target_arch = "x86_64")]
+use platform_specific::{debug, info, warn};
 #[cfg(target_arch = "x86_64")]
 pub use platform_specific_x86_64 as platform_specific;
 
 pub mod ledger_entry;
 pub mod partition_table;
 
-use crate::platform_specific::{persistent_storage_read64, persistent_storage_write64};
+use crate::platform_specific::{
+    is_persistent_storage_ready, persistent_storage_read64, persistent_storage_size_bytes,
+    persistent_storage_write64,
+};
 use ahash::AHashMap;
 use borsh::{to_vec, BorshDeserialize, BorshSerialize};
 use indexmap::IndexMap;
 pub use ledger_entry::{Key, LedgerBlock, LedgerEntry, Operation, Value};
-use platform_specific::{info, persistent_storage_ready, warn};
 use sha2::{Digest, Sha256};
 use std::{cell::RefCell, fmt::Debug};
 
@@ -86,7 +94,7 @@ pub(crate) struct Metadata {
 
 impl Default for Metadata {
     fn default() -> Self {
-        info!(
+        debug!(
             "next_write_position: {}",
             partition_table::get_data_partition().start_lba
         );
@@ -125,7 +133,7 @@ impl Metadata {
             self.parent_hash = deserialized_metadata.parent_hash;
         }
 
-        info!(
+        debug!(
             "Read metadata of num_blocks {} next_write_position {}",
             self.num_blocks, self.next_write_position
         );
@@ -148,6 +156,11 @@ impl Metadata {
 
     fn _read_raw_metadata_bytes(&self) -> anyhow::Result<Vec<u8>> {
         let part_entry = partition_table::get_metadata_partition();
+        if part_entry.start_lba >= persistent_storage_size_bytes() {
+            return Err(anyhow::format_err!(
+                "Metadata partition beyond the end of persistent storage."
+            ));
+        }
         let mut buf = [0u8; std::mem::size_of::<Metadata>() * 2];
         persistent_storage_read64(part_entry.start_lba, &mut buf)?;
         Ok(buf.to_vec())
@@ -211,7 +224,7 @@ where
         let block_len_bytes = serialized_data.len();
         let serialized_data_len = block_len_bytes.to_le_bytes();
 
-        info!(
+        debug!(
             "entry_len_bytes {} serialized_data_len: {:?} serialized_data: {:?}",
             block_len_bytes, serialized_data_len, serialized_data
         );
@@ -239,8 +252,8 @@ where
         let mut buf = [0u8; std::mem::size_of::<usize>()];
         persistent_storage_read64(offset, &mut buf)?;
         let block_len: usize = usize::from_le_bytes(buf);
-        info!("read bytes: {:?}", buf);
-        info!("block_len: {}", block_len);
+        debug!("read bytes: {:?}", buf);
+        debug!("block_len: {}", block_len);
 
         // Read the block as raw bytes
         let mut buf = vec![0u8; block_len];
@@ -255,7 +268,7 @@ where
     }
 
     pub fn ready(&self) -> bool {
-        persistent_storage_ready()
+        is_persistent_storage_ready()
     }
 
     pub fn begin_block(&mut self) -> anyhow::Result<()> {
@@ -331,13 +344,22 @@ where
             return Ok(self);
         }
 
+        let data_part_entry = partition_table::get_data_partition();
+        if persistent_storage_size_bytes() < data_part_entry.start_lba {
+            warn!("No data found in persistent storage");
+            return Ok(self);
+        }
+
         let mut entries_hash2offset = IndexMap::new();
 
         self.metadata
             .borrow_mut()
             .update_from_persistent_storage()?;
         let num_blocks = self.metadata.borrow().num_blocks;
-        info!("Num blocks: {}", self.metadata.borrow().num_blocks);
+        info!(
+            "Total blocks in ledger: {}",
+            self.metadata.borrow().num_blocks
+        );
 
         let mut parent_hash = Vec::new();
         let mut updates = Vec::new();

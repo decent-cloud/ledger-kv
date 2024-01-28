@@ -1,11 +1,10 @@
 use std::io::{Read as _, Seek as _, Write as _};
 use std::path::PathBuf;
+use std::sync::RwLock;
 
 use fs_err as fs;
 use fs_err::{File, OpenOptions};
-pub(crate) use log::{error, info, warn};
-
-use crate::partition_table;
+pub(crate) use log::{debug, error, info, warn};
 
 #[derive(Default)]
 struct BackingFile {
@@ -25,6 +24,7 @@ impl BackingFile {
             Some(path) => path.join("ledger-kv").join("data.bin"),
             None => PathBuf::from("data.bin"),
         });
+        info!("Using persistent storage: {:?}", file_path);
         fs::create_dir_all(file_path.parent().expect("Could not find parent directory")).unwrap();
         self.file = Some(
             OpenOptions::new()
@@ -47,8 +47,17 @@ pub fn override_backing_file(file_path: Option<PathBuf>) {
     BACKING_FILE.with(|backing_file| backing_file.borrow_mut().change_backing_file(file_path));
 }
 
-pub fn persistent_storage_ready() -> bool {
-    persistent_storage_size_bytes() > partition_table::get_data_partition().start_lba
+lazy_static::lazy_static! {
+    pub static ref PERSISTENT_STORAGE_READY: RwLock<bool> = RwLock::new(false);
+}
+
+pub fn is_persistent_storage_ready() -> bool {
+    persistent_storage_size_bytes() > 0
+}
+
+pub fn persistent_storage_set_ready(value: bool) {
+    let mut ready = PERSISTENT_STORAGE_READY.write().unwrap();
+    *ready = value;
 }
 
 pub fn persistent_storage_size_bytes() -> u64 {
@@ -69,7 +78,7 @@ pub fn persistent_storage_read64(offset: u64, buf: &mut [u8]) -> anyhow::Result<
         |backing_file| match backing_file.borrow_mut().file.as_mut() {
             Some(file) => {
                 let file_size_bytes = file.metadata().unwrap().len();
-                info!(
+                debug!(
                     "Reading from persistent storage {:?} @ {} .. {}",
                     file.path(),
                     offset,
@@ -82,7 +91,7 @@ pub fn persistent_storage_read64(offset: u64, buf: &mut [u8]) -> anyhow::Result<
                 }
                 file.seek(std::io::SeekFrom::Start(offset)).unwrap();
                 file.read_exact(buf).unwrap();
-                info!("Read bytes: {:?}", buf);
+                debug!("Read bytes: {:?}", buf);
                 Ok(())
             }
             None => Err(anyhow::format_err!(
@@ -112,7 +121,7 @@ pub fn persistent_storage_write64(offset: u64, buf: &[u8]) {
                         file_size_bytes_new
                     );
                 }
-                info!(
+                debug!(
                     "Writing {} bytes to persistent storage @offset {}: {:?}",
                     buf.len(),
                     offset,
@@ -138,6 +147,7 @@ pub fn persistent_storage_grow64(additional_pages: u64) -> Result<u64, String> {
             info!("Growing persistent storage to {} bytes.", new_size_bytes);
             file.set_len(new_size_bytes)
                 .map_err(|err| err.to_string())?;
+            persistent_storage_set_ready(true);
             Ok(previous_size_bytes * PERSISTENT_STORAGE_PAGE_SIZE)
         }
         None => Ok(0),
