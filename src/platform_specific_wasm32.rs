@@ -1,5 +1,6 @@
-pub use crate::{error, info, warn};
-use ic_canister_log::{declare_log_buffer, export, log};
+pub use crate::{debug, error, info, warn}; // created in the crate root by macro_export
+pub use ic_canister_log::log;
+use ic_canister_log::{declare_log_buffer, export, LogEntry};
 use ic_cdk::println;
 use std::cell::RefCell;
 use std::collections::VecDeque;
@@ -7,43 +8,68 @@ use std::fmt;
 use std::thread::LocalKey;
 
 // Keep up to "capacity" last messages.
+declare_log_buffer!(name = DEBUG, capacity = 10000);
 declare_log_buffer!(name = INFO, capacity = 10000);
 declare_log_buffer!(name = WARN, capacity = 10000);
 declare_log_buffer!(name = ERROR, capacity = 10000);
 
 #[macro_export]
+macro_rules! debug {
+    ($message:expr $(,$args:expr)* $(,)*) => {{
+        $crate::platform_specific_wasm32::log!($crate::platform_specific_wasm32::DEBUG, $message $(,$args)*);
+    }}
+}
+
+#[macro_export]
 macro_rules! info {
     ($message:expr $(,$args:expr)* $(,)*) => {{
-        log!($crate::platform_specific_wasm32::INFO, $message $(,$args)*);
+        $crate::platform_specific_wasm32::log!($crate::platform_specific_wasm32::INFO, $message $(,$args)*);
     }}
 }
 
 #[macro_export]
 macro_rules! warn {
     ($message:expr $(,$args:expr)* $(,)*) => {{
-        log!($crate::platform_specific_wasm32::WARN, $message $(,$args)*);
+        $crate::platform_specific_wasm32::log!($crate::platform_specific_wasm32::WARN, $message $(,$args)*);
     }}
 }
 
 #[macro_export]
 macro_rules! error {
     ($message:expr $(,$args:expr)* $(,)*) => {{
-        log!($crate::platform_specific_wasm32::ERROR, $message $(,$args)*);
+        $crate::platform_specific_wasm32::log!($crate::platform_specific_wasm32::ERROR, $message $(,$args)*);
     }}
+}
+
+pub fn export_debug() -> Vec<LogEntry> {
+    export(&DEBUG)
+}
+
+pub fn export_info() -> Vec<LogEntry> {
+    export(&INFO)
+}
+
+pub fn export_warn() -> Vec<LogEntry> {
+    export(&WARN)
+}
+
+pub fn export_error() -> Vec<LogEntry> {
+    export(&ERROR)
 }
 
 pub const PERSISTENT_STORAGE_PAGE_SIZE: u64 = 64 * 1024;
 
-lazy_static::lazy_static! {
-    pub static ref PERSISTENT_STORAGE_READY: bool = false;
+thread_local! {
+    pub static PERSISTENT_STORAGE_READY: std::cell::RefCell<bool> =
+        std::cell::RefCell::new(false);
 }
 
 pub fn is_persistent_storage_ready() -> bool {
-    *PERSISTENT_STORAGE_READY
+    PERSISTENT_STORAGE_READY.with(|x| *x.borrow())
 }
 
 pub fn persistent_storage_set_ready(value: bool) {
-    *PERSISTENT_STORAGE_READY = value
+    PERSISTENT_STORAGE_READY.with(|x| *x.borrow_mut() = value)
 }
 
 pub fn persistent_storage_size_bytes() -> u64 {

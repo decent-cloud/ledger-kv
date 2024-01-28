@@ -56,16 +56,20 @@
 #[cfg(target_arch = "wasm32")]
 pub mod platform_specific_wasm32;
 #[cfg(target_arch = "wasm32")]
-use crate::platform_specific::Sink;
+use ic_canister_log::log;
 #[cfg(target_arch = "wasm32")]
 pub use platform_specific_wasm32 as platform_specific;
 
 #[cfg(target_arch = "x86_64")]
 pub mod platform_specific_x86_64;
 #[cfg(target_arch = "x86_64")]
-use platform_specific::{debug, info, warn};
+pub use platform_specific::{debug, error, info, warn};
 #[cfg(target_arch = "x86_64")]
 pub use platform_specific_x86_64 as platform_specific;
+
+pub use platform_specific::{export_debug, export_error, export_info, export_warn};
+use std::{collections::HashMap, hash::BuildHasherDefault};
+pub type AHashMap<K, V> = HashMap<K, V, BuildHasherDefault<ahash::AHasher>>;
 
 pub mod ledger_entry;
 pub mod partition_table;
@@ -74,7 +78,6 @@ use crate::platform_specific::{
     is_persistent_storage_ready, persistent_storage_read64, persistent_storage_size_bytes,
     persistent_storage_write64,
 };
-use ahash::AHashMap;
 use borsh::{to_vec, BorshDeserialize, BorshSerialize};
 use indexmap::IndexMap;
 pub use ledger_entry::{Key, LedgerBlock, LedgerEntry, Operation, Value};
@@ -194,7 +197,7 @@ where
         LedgerKV {
             metadata: RefCell::new(Metadata::new()),
             entries_next_block: IndexMap::new(),
-            entries: AHashMap::new(),
+            entries: AHashMap::default(),
             entry_hash2offset: IndexMap::new(),
         }
         .refresh_ledger()

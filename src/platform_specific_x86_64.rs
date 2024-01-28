@@ -4,7 +4,24 @@ use std::sync::RwLock;
 
 use fs_err as fs;
 use fs_err::{File, OpenOptions};
-pub(crate) use log::{debug, error, info, warn};
+pub use log::{debug, error, info, warn};
+
+// These functions exist only for compatibility with the wasm32 implementation.
+pub fn export_debug() -> Vec<String> {
+    Vec::new()
+}
+
+pub fn export_info() -> Vec<String> {
+    Vec::new()
+}
+
+pub fn export_warn() -> Vec<String> {
+    Vec::new()
+}
+
+pub fn export_error() -> Vec<String> {
+    Vec::new()
+}
 
 #[derive(Default)]
 struct BackingFile {
