@@ -6,23 +6,6 @@ use fs_err as fs;
 use fs_err::{File, OpenOptions};
 pub use log::{debug, error, info, warn};
 
-// These functions exist only for compatibility with the wasm32 implementation.
-pub fn export_debug() -> Vec<String> {
-    Vec::new()
-}
-
-pub fn export_info() -> Vec<String> {
-    Vec::new()
-}
-
-pub fn export_warn() -> Vec<String> {
-    Vec::new()
-}
-
-pub fn export_error() -> Vec<String> {
-    Vec::new()
-}
-
 #[derive(Default)]
 struct BackingFile {
     file: Option<File>,
@@ -172,3 +155,20 @@ pub fn persistent_storage_grow64(additional_pages: u64) -> Result<u64, String> {
 }
 
 pub const PERSISTENT_STORAGE_PAGE_SIZE: u64 = 64 * 1024;
+
+// These functions exist only for compatibility with the wasm32 implementation.
+pub fn export_debug() -> Vec<String> {
+    Vec::new()
+}
+
+pub fn export_info() -> Vec<String> {
+    Vec::new()
+}
+
+pub fn export_warn() -> Vec<String> {
+    Vec::new()
+}
+
+pub fn export_error() -> Vec<String> {
+    Vec::new()
+}
