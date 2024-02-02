@@ -369,10 +369,17 @@ where
         let mut updates = Vec::new();
         // Step 1: Read all Ledger Blocks
         for ledger_block in self.iter_raw(num_blocks) {
+            let ledger_block = ledger_block?;
             // Update the in-memory IndexMap of entries, used for quick lookups
             let expected_hash =
                 Self::_compute_cumulative_hash(&parent_hash, &ledger_block.entries)?;
-            assert_eq!(expected_hash, ledger_block.hash);
+            if ledger_block.hash != expected_hash {
+                return Err(anyhow::format_err!(
+                    "Hash mismatch: expected {:?}, got {:?}",
+                    expected_hash,
+                    ledger_block.hash
+                ));
+            };
 
             parent_hash.clear();
             parent_hash.extend_from_slice(&ledger_block.hash);
@@ -427,14 +434,23 @@ where
             .into_iter()
     }
 
-    pub fn iter_raw(&self, num_blocks: usize) -> impl Iterator<Item = LedgerBlock<TL>> + '_ {
+    pub fn iter_raw(
+        &self,
+        num_blocks: usize,
+    ) -> impl Iterator<Item = anyhow::Result<LedgerBlock<TL>>> + '_ {
         let data_start = partition_table::get_data_partition().start_lba;
         (0..num_blocks).scan(data_start, |state, _| {
-            let (offset_next, ledger_block) = self
-                ._journal_read_block(*state)
-                .expect("Failed to read Ledger block");
+            let (offset_next, ledger_block) = match self._journal_read_block(*state) {
+                Ok(block) => block,
+                Err(err) => {
+                    return Some(Err(anyhow::format_err!(
+                        "Failed to read Ledger block: {}",
+                        err
+                    )))
+                }
+            };
             *state = offset_next;
-            Some(ledger_block)
+            Some(Ok(ledger_block))
         })
     }
 
