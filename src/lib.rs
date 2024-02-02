@@ -284,7 +284,13 @@ where
     }
 
     pub fn commit_block(&self) -> anyhow::Result<()> {
-        if !self.entries_next_block.is_empty() {
+        if self.entries_next_block.is_empty() {
+            info!("Commit of empty block invoked, skipping");
+        } else {
+            info!(
+                "Commit non-empty block, with {} entries",
+                self.entries_next_block.len()
+            );
             let block_entries = Vec::from_iter(self.entries_next_block.values().cloned());
             let hash = Self::_compute_cumulative_hash(
                 self.metadata.borrow().get_parent_hash(),
