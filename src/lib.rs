@@ -169,7 +169,7 @@ impl Metadata {
                 "Metadata partition beyond the end of persistent storage."
             ));
         }
-        let mut buf = [0u8; std::mem::size_of::<Metadata>() * 2];
+        let mut buf = [0u8; std::mem::size_of::<Metadata>() * 10];
         persistent_storage_read64(part_entry.start_lba, &mut buf)?;
         Ok(buf.to_vec())
     }
