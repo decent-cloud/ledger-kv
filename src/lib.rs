@@ -123,6 +123,12 @@ impl Metadata {
     fn update_from_persistent_storage(&mut self) -> anyhow::Result<()> {
         let metadata_bytes = self._read_raw_metadata_bytes()?;
 
+        info!(
+            "Read {} bytes from persistent storage",
+            metadata_bytes.len()
+        );
+        info!("Read metadata bytes: {:?}", metadata_bytes);
+
         if metadata_bytes.is_empty() {
             self.num_blocks = 0;
             self.next_write_position = partition_table::get_data_partition().start_lba as usize;
@@ -278,7 +284,7 @@ where
         Ok(())
     }
 
-    pub fn commit_block(&self) -> anyhow::Result<()> {
+    pub fn commit_block(&mut self) -> anyhow::Result<()> {
         if self.entries_next_block.is_empty() {
             debug!("Commit of empty block invoked, skipping");
         } else {
@@ -297,6 +303,7 @@ where
                 hash,
             );
             self._journal_append_block(block)?;
+            self.entries_next_block.clear();
         }
         Ok(())
     }
@@ -562,6 +569,7 @@ mod tests {
             ))
         );
         assert_eq!(ledger_kv.metadata.borrow().num_blocks, 1);
+        assert!(ledger_kv.entries_next_block.is_empty());
     }
 
     #[test]
