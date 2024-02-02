@@ -332,7 +332,7 @@ where
 
         match self.entries.get_mut(&label) {
             Some(entries) => {
-                entries.remove(&key);
+                entries.swap_remove(&key);
             }
             None => {
                 warn!("Entry label {:?} not found", label);
@@ -403,7 +403,7 @@ where
                         entries_hash2offset.insert(ledger_block.hash.to_vec(), ledger_block.offset);
                     }
                     Operation::Delete => {
-                        entries.remove(&ledger_entry.key);
+                        entries.swap_remove(&ledger_entry.key);
                     }
                 }
             }
