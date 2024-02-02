@@ -1,6 +1,5 @@
 use std::io::{Read as _, Seek as _, Write as _};
 use std::path::PathBuf;
-use std::sync::RwLock;
 
 use fs_err as fs;
 use fs_err::{File, OpenOptions};
