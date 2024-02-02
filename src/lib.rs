@@ -285,7 +285,7 @@ where
 
     pub fn commit_block(&self) -> anyhow::Result<()> {
         if self.entries_next_block.is_empty() {
-            info!("Commit of empty block invoked, skipping");
+            debug!("Commit of empty block invoked, skipping");
         } else {
             info!(
                 "Commit non-empty block, with {} entries",
