@@ -56,6 +56,8 @@
 #[cfg(target_arch = "wasm32")]
 pub mod platform_specific_wasm32;
 #[cfg(target_arch = "wasm32")]
+use ic_cdk::println;
+#[cfg(target_arch = "wasm32")]
 pub use platform_specific_wasm32 as platform_specific;
 
 #[cfg(target_arch = "x86_64")]
