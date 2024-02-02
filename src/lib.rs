@@ -56,8 +56,6 @@
 #[cfg(target_arch = "wasm32")]
 pub mod platform_specific_wasm32;
 #[cfg(target_arch = "wasm32")]
-use ic_canister_log::log;
-#[cfg(target_arch = "wasm32")]
 pub use platform_specific_wasm32 as platform_specific;
 
 #[cfg(target_arch = "x86_64")]
@@ -431,6 +429,10 @@ where
             Some(ledger_block)
         })
     }
+
+    pub fn get_latest_hash(&self) -> Vec<u8> {
+        self.metadata.borrow().get_parent_hash().to_vec()
+    }
 }
 
 #[cfg(test)]
@@ -676,6 +678,9 @@ mod tests {
             ledger_kv.metadata.borrow().parent_hash,
             expected_parent_hash
         );
+
+        // get_latest_hash should return the parent hash
+        assert_eq!(ledger_kv.get_latest_hash(), expected_parent_hash);
     }
 
     #[test]
@@ -701,10 +706,10 @@ mod tests {
 
         // Assert that the metadata fields are correctly deserialized
         assert_eq!(deserialized_metadata.num_blocks, 10);
-        assert_eq!(deserialized_metadata.parent_hash, vec![0, 1, 2, 3]);
+        assert_eq!(deserialized_metadata.parent_hash, metadata.parent_hash);
 
         // Assert that the deserialized metadata matches the original metadata
         assert_eq!(deserialized_metadata.num_blocks, 10);
-        assert_eq!(deserialized_metadata.parent_hash, vec![0, 1, 2, 3]);
+        assert_eq!(deserialized_metadata.parent_hash, metadata.parent_hash);
     }
 }
