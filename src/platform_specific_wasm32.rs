@@ -55,19 +55,6 @@ pub fn export_error() -> Vec<LogEntry> {
 
 pub const PERSISTENT_STORAGE_PAGE_SIZE: u64 = 64 * 1024;
 
-thread_local! {
-    pub static PERSISTENT_STORAGE_READY: std::cell::RefCell<bool> =
-        std::cell::RefCell::new(false);
-}
-
-pub fn is_persistent_storage_ready() -> bool {
-    PERSISTENT_STORAGE_READY.with(|x| *x.borrow())
-}
-
-pub fn persistent_storage_set_ready(value: bool) {
-    PERSISTENT_STORAGE_READY.with(|x| *x.borrow_mut() = value)
-}
-
 pub fn persistent_storage_size_bytes() -> u64 {
     ic_cdk::api::stable::stable64_size() * PERSISTENT_STORAGE_PAGE_SIZE
 }

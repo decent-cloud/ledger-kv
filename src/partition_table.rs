@@ -1,6 +1,9 @@
+#[cfg(target_arch = "wasm32")]
+use ic_cdk::println;
+
 use crate::platform_specific::{
-    is_persistent_storage_ready, persistent_storage_grow64, persistent_storage_read64,
-    persistent_storage_size_bytes, persistent_storage_write64, PERSISTENT_STORAGE_PAGE_SIZE,
+    persistent_storage_grow64, persistent_storage_read64, persistent_storage_size_bytes,
+    persistent_storage_write64, PERSISTENT_STORAGE_PAGE_SIZE,
 };
 use crate::{debug, info, warn};
 use serde::ser::{SerializeStruct, Serializer};
@@ -184,11 +187,6 @@ impl PartitionTable {
         if persistent_storage_bytes < PARTITION_TABLE_START_OFFSET + Self::size() as u64 {
             return Err(anyhow::format_err!(
                 "Not enough persistent storage allocated"
-            ));
-        }
-        if !is_persistent_storage_ready() {
-            return Err(anyhow::format_err!(
-                "Persistent storage not ready".to_string()
             ));
         }
         debug!(

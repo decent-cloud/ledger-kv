@@ -71,8 +71,7 @@ pub mod ledger_entry;
 pub mod partition_table;
 
 use crate::platform_specific::{
-    is_persistent_storage_ready, persistent_storage_read64, persistent_storage_size_bytes,
-    persistent_storage_write64,
+    persistent_storage_read64, persistent_storage_size_bytes, persistent_storage_write64,
 };
 pub use platform_specific::{export_debug, export_error, export_info, export_warn};
 
@@ -270,10 +269,6 @@ where
         }
     }
 
-    pub fn ready(&self) -> bool {
-        is_persistent_storage_ready()
-    }
-
     pub fn begin_block(&mut self) -> anyhow::Result<()> {
         if !&self.entries_next_block.is_empty() {
             return Err(anyhow::format_err!("There is already an open transaction."));
@@ -347,9 +342,9 @@ where
         self.entries.clear();
         self.entry_hash2offset.clear();
 
-        // If the backend is not ready (e.g. the backing file does not exist), just return
-        if !self.ready() {
-            warn!("Backend not ready");
+        // If the backend is empty or non-existing, just return
+        if persistent_storage_size_bytes() == 0 {
+            warn!("Persistent storage is empty");
             return Ok(self);
         }
 

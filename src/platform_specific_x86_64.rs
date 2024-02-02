@@ -47,19 +47,6 @@ pub fn override_backing_file(file_path: Option<PathBuf>) {
     BACKING_FILE.with(|backing_file| backing_file.borrow_mut().change_backing_file(file_path));
 }
 
-lazy_static::lazy_static! {
-    pub static ref PERSISTENT_STORAGE_READY: RwLock<bool> = RwLock::new(false);
-}
-
-pub fn is_persistent_storage_ready() -> bool {
-    persistent_storage_size_bytes() > 0
-}
-
-pub fn persistent_storage_set_ready(value: bool) {
-    let mut ready = PERSISTENT_STORAGE_READY.write().unwrap();
-    *ready = value;
-}
-
 pub fn persistent_storage_size_bytes() -> u64 {
     BACKING_FILE.with(|backing_file| match backing_file.borrow().file.as_ref() {
         Some(file) => match file.metadata() {
@@ -147,7 +134,6 @@ pub fn persistent_storage_grow64(additional_pages: u64) -> Result<u64, String> {
             info!("Growing persistent storage to {} bytes.", new_size_bytes);
             file.set_len(new_size_bytes)
                 .map_err(|err| err.to_string())?;
-            persistent_storage_set_ready(true);
             Ok(previous_size_bytes * PERSISTENT_STORAGE_PAGE_SIZE)
         }
         None => Ok(0),
