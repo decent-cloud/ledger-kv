@@ -191,7 +191,10 @@ impl PartitionTable {
                 "Persistent storage not ready".to_string()
             ));
         }
-        println!("Persistent storage size: {}", persistent_storage_bytes);
+        debug!(
+            "Reading from persistent storage of size {} bytes",
+            persistent_storage_bytes
+        );
 
         let mut buf = vec![0; Self::size()];
 
@@ -219,7 +222,7 @@ impl PartitionTable {
                 break;
             }
         }
-        info!("Partition table: {}", self);
+        info!("Restored Partition Table: {}", self);
 
         Ok(self)
     }
