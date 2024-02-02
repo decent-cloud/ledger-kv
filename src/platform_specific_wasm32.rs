@@ -2,10 +2,6 @@ pub use crate::{debug, error, info, warn}; // created in the crate root by macro
 pub use ic_canister_log::log;
 use ic_canister_log::{declare_log_buffer, export, LogEntry};
 use ic_cdk::println;
-use std::cell::RefCell;
-use std::collections::VecDeque;
-use std::fmt;
-use std::thread::LocalKey;
 
 // Keep up to "capacity" last messages.
 declare_log_buffer!(name = DEBUG, capacity = 10000);
