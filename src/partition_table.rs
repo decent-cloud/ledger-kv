@@ -93,10 +93,21 @@ impl PartitionTableEntry {
                 bytes.len()
             ));
         }
+
         Ok(PartitionTableEntry {
-            name: bytes[0..16].try_into().unwrap(),
-            start_lba: u64::from_le_bytes(bytes[16..24].try_into().unwrap()),
-            end_lba: u64::from_le_bytes(bytes[24..32].try_into().unwrap()),
+            name: bytes[0..16]
+                .try_into()
+                .map_err(|_| "Slice to array conversion failed for bytes 0..16")?,
+            start_lba: u64::from_le_bytes(
+                bytes[16..24]
+                    .try_into()
+                    .map_err(|_| "Slice to array conversion failed for bytes 16..24")?,
+            ),
+            end_lba: u64::from_le_bytes(
+                bytes[24..32]
+                    .try_into()
+                    .map_err(|_| "Slice to array conversion failed for bytes 16..24")?,
+            ),
         })
     }
 

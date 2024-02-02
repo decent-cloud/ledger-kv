@@ -129,7 +129,7 @@ impl Metadata {
             self.parent_hash = Vec::new();
         } else {
             let deserialized_metadata: Metadata =
-                Metadata::deserialize(&mut metadata_bytes.as_ref()).unwrap();
+                Metadata::deserialize(&mut metadata_bytes.as_ref())?;
             self.num_blocks = deserialized_metadata.num_blocks;
             self.next_write_position = deserialized_metadata.next_write_position;
             self.parent_hash = deserialized_metadata.parent_hash;
@@ -388,7 +388,12 @@ where
                     None => {
                         let new_map = IndexMap::new();
                         self.entries.insert(ledger_entry.label.clone(), new_map);
-                        self.entries.get_mut(&ledger_entry.label).unwrap()
+                        self.entries
+                            .get_mut(&ledger_entry.label)
+                            .ok_or(anyhow::format_err!(
+                                "Entry label {:?} not found",
+                                ledger_entry.label
+                            ))?
                     }
                 };
 
