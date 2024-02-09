@@ -26,7 +26,8 @@
 //! #[derive(BorshSerialize, BorshDeserialize, Clone, PartialEq, Eq, Debug, Hash)]
 //! pub enum EntryLabel {
 //!     Unspecified,
-//!     SomeLabel,
+//!     Label1,
+//!     Label2,
 //! }
 //!
 //! // Optional: Override the backing file path
@@ -36,21 +37,28 @@
 //! // Create a new LedgerKV instance
 //! let mut ledger_kv = LedgerKV::new().expect("Failed to create LedgerKV");
 //!
-//! // Insert a new entry
-//! let label = EntryLabel::Unspecified;
-//! let key = b"key".to_vec();
-//! let value = b"value".to_vec();
-//! ledger_kv.upsert(label.clone(), key.clone(), value.clone()).unwrap();
-//! ledger_kv.upsert(label.clone(), b"key2".to_vec(), b"value2".to_vec()).unwrap();
+//! // Insert a few new entries, each with a separate label
+//! ledger_kv.upsert(EntryLabel::Label1, b"key1".to_vec(), b"value1".to_vec()).unwrap();
+//! ledger_kv.upsert(EntryLabel::Label2, b"key2".to_vec(), b"value2".to_vec()).unwrap();
 //! ledger_kv.commit_block().unwrap();
 //!
 //! // Retrieve all entries
 //! let entries = ledger_kv.iter(None).collect::<Vec<_>>();
 //! println!("All entries: {:?}", entries);
+//! // Label1 entries
+//! let entries = ledger_kv.iter(Some(EntryLabel::Label1)).collect::<Vec<_>>();
+//! println!("Label1 entries: {:?}", entries);
+//! // Label2 entries
+//! let entries = ledger_kv.iter(Some(EntryLabel::Label2)).collect::<Vec<_>>();
+//! println!("Label2 entries: {:?}", entries);
 //!
 //! // Delete an entry
-//! ledger_kv.delete(label, key).unwrap();
+//! ledger_kv.delete(EntryLabel::Label1, b"key1".to_vec()).unwrap();
 //! ledger_kv.commit_block().unwrap();
+//! // Label1 entries are now empty
+//! assert_eq!(ledger_kv.iter(Some(EntryLabel::Label1)).count(), 0);
+//! // Label2 entries still exist
+//! assert_eq!(ledger_kv.iter(Some(EntryLabel::Label2)).count(), 1);
 //! ```
 
 #[cfg(target_arch = "wasm32")]
