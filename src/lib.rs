@@ -461,7 +461,7 @@ where
         })
     }
 
-    pub fn get_latest_hash(&self) -> Vec<u8> {
+    pub fn get_latest_block_hash(&self) -> Vec<u8> {
         self.metadata.borrow().get_parent_hash().to_vec()
     }
 }
@@ -712,7 +712,7 @@ mod tests {
         );
 
         // get_latest_hash should return the parent hash
-        assert_eq!(ledger_kv.get_latest_hash(), expected_parent_hash);
+        assert_eq!(ledger_kv.get_latest_block_hash(), expected_parent_hash);
     }
 
     #[test]
