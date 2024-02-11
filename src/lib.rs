@@ -81,6 +81,8 @@ pub mod partition_table;
 use crate::platform_specific::{
     persistent_storage_read64, persistent_storage_size_bytes, persistent_storage_write64,
 };
+#[cfg(target_arch = "x86_64")]
+pub use platform_specific::override_backing_file;
 pub use platform_specific::{export_debug, export_error, export_info, export_warn};
 
 use std::{collections::HashMap, hash::BuildHasherDefault};
