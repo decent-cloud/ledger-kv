@@ -94,12 +94,12 @@ use std::{cell::RefCell, fmt::Debug};
 /// Struct representing the metadata of the ledger.
 #[derive(BorshSerialize, BorshDeserialize, Clone, Debug)]
 pub(crate) struct Metadata {
-    /// The number of entries in the ledger.
+    /// The number of blocks in the ledger so far.
     pub(crate) num_blocks: usize,
-    /// The last offset in the file.
-    pub(crate) next_write_position: usize,
-    /// The hash of the parent metadata.
-    pub(crate) parent_hash: Vec<u8>,
+    /// The chain hash of the entire ledger, to be used as the initial hash of the next block.
+    pub(crate) last_block_chain_hash: Vec<u8>,
+    /// The offset in the persistent storage where the next block will be written.
+    pub(crate) next_block_write_position: usize,
 }
 
 impl Default for Metadata {
@@ -110,8 +110,8 @@ impl Default for Metadata {
         );
         Metadata {
             num_blocks: 0,
-            next_write_position: partition_table::get_data_partition().start_lba as usize,
-            parent_hash: Vec::new(),
+            last_block_chain_hash: Vec::new(),
+            next_block_write_position: partition_table::get_data_partition().start_lba as usize,
         }
     }
 }
@@ -123,8 +123,8 @@ impl Metadata {
 
     pub fn clear(&mut self) {
         self.num_blocks = 0;
-        self.next_write_position = partition_table::get_data_partition().start_lba as usize;
-        self.parent_hash = Vec::new();
+        self.last_block_chain_hash = Vec::new();
+        self.next_block_write_position = partition_table::get_data_partition().start_lba as usize;
     }
 
     /// Refreshes (re-reads) the metadata by reading from the persistent storage.
@@ -139,19 +139,20 @@ impl Metadata {
 
         if metadata_bytes.is_empty() {
             self.num_blocks = 0;
-            self.next_write_position = partition_table::get_data_partition().start_lba as usize;
-            self.parent_hash = Vec::new();
+            self.last_block_chain_hash = Vec::new();
+            self.next_block_write_position =
+                partition_table::get_data_partition().start_lba as usize;
         } else {
             let deserialized_metadata: Metadata =
                 Metadata::deserialize(&mut metadata_bytes.as_ref())?;
             self.num_blocks = deserialized_metadata.num_blocks;
-            self.next_write_position = deserialized_metadata.next_write_position;
-            self.parent_hash = deserialized_metadata.parent_hash;
+            self.last_block_chain_hash = deserialized_metadata.last_block_chain_hash;
+            self.next_block_write_position = deserialized_metadata.next_block_write_position;
         }
 
         debug!(
-            "Read metadata of num_blocks {} next_write_position {}",
-            self.num_blocks, self.next_write_position
+            "Read metadata of {} blocks; next_block_write_position: {}",
+            self.num_blocks, self.next_block_write_position
         );
         Ok(())
     }
@@ -159,15 +160,15 @@ impl Metadata {
     fn append_entries(&mut self, parent_hash: &[u8], position: usize) -> anyhow::Result<()> {
         // let md: &mut Metadata = &mut *self.borrow_mut();
         self.num_blocks += 1;
-        self.parent_hash = parent_hash.to_vec();
-        self.next_write_position = position;
+        self.last_block_chain_hash = parent_hash.to_vec();
+        self.next_block_write_position = position;
         let metadata_bytes = to_vec(self).expect("Failed to serialize metadata");
         self._save_raw_metadata_bytes(&metadata_bytes)?;
         self.update_from_persistent_storage()
     }
 
-    fn get_parent_hash(&self) -> &[u8] {
-        self.parent_hash.as_slice()
+    fn get_last_block_chain_hash(&self) -> &[u8] {
+        self.last_block_chain_hash.as_slice()
     }
 
     fn _read_raw_metadata_bytes(&self) -> anyhow::Result<Vec<u8>> {
@@ -216,12 +217,12 @@ where
         .refresh_ledger()
     }
 
-    fn _compute_cumulative_hash(
-        parent_hash: &[u8],
+    fn _compute_block_chain_hash(
+        last_block_chain_hash: &[u8],
         block_entries: &[LedgerEntry<TL>],
     ) -> anyhow::Result<Vec<u8>> {
         let mut hasher = Sha256::new();
-        hasher.update(parent_hash);
+        hasher.update(last_block_chain_hash);
         for entry in block_entries.iter() {
             hasher.update(to_vec(entry)?);
         }
@@ -245,15 +246,16 @@ where
             block_len_bytes, serialized_data_len, serialized_data
         );
         persistent_storage_write64(
-            self.metadata.borrow().next_write_position as u64,
+            self.metadata.borrow().next_block_write_position as u64,
             &serialized_data_len,
         );
         persistent_storage_write64(
-            self.metadata.borrow().next_write_position as u64 + serialized_data_len.len() as u64,
+            self.metadata.borrow().next_block_write_position as u64
+                + serialized_data_len.len() as u64,
             &serialized_data,
         );
 
-        let next_write_position = self.metadata.borrow().next_write_position
+        let next_write_position = self.metadata.borrow().next_block_write_position
             + serialized_data_len.len()
             + serialized_data.len();
         self.metadata
@@ -301,13 +303,13 @@ where
                 self.entries_next_block.len()
             );
             let block_entries = Vec::from_iter(self.entries_next_block.values().cloned());
-            let hash = Self::_compute_cumulative_hash(
-                self.metadata.borrow().get_parent_hash(),
+            let hash = Self::_compute_block_chain_hash(
+                self.metadata.borrow().get_last_block_chain_hash(),
                 &block_entries,
             )?;
             let block = LedgerBlock::new(
                 block_entries,
-                self.metadata.borrow().next_write_position,
+                self.metadata.borrow().next_block_write_position,
                 hash,
             );
             self._journal_append_block(block)?;
@@ -387,7 +389,7 @@ where
             let ledger_block = ledger_block?;
             // Update the in-memory IndexMap of entries, used for quick lookups
             let expected_hash =
-                Self::_compute_cumulative_hash(&parent_hash, &ledger_block.entries)?;
+                Self::_compute_block_chain_hash(&parent_hash, &ledger_block.entries)?;
             if ledger_block.hash != expected_hash {
                 return Err(anyhow::format_err!(
                     "Hash mismatch: expected {:?}, got {:?}",
@@ -470,7 +472,7 @@ where
     }
 
     pub fn get_latest_block_hash(&self) -> Vec<u8> {
-        self.metadata.borrow().get_parent_hash().to_vec()
+        self.metadata.borrow().get_last_block_chain_hash().to_vec()
     }
 }
 
@@ -542,7 +544,7 @@ mod tests {
             vec![],
         );
         let cumulative_hash =
-            LedgerKV::_compute_cumulative_hash(&parent_hash, &ledger_block.entries).unwrap();
+            LedgerKV::_compute_block_chain_hash(&parent_hash, &ledger_block.entries).unwrap();
 
         // Cumulative hash is a sha256 hash of the parent hash, key, and value
         assert_eq!(
@@ -715,7 +717,7 @@ mod tests {
             }
         );
         assert_eq!(
-            ledger_kv.metadata.borrow().parent_hash,
+            ledger_kv.metadata.borrow().last_block_chain_hash,
             expected_parent_hash
         );
 
@@ -728,7 +730,7 @@ mod tests {
         let mut metadata = create_temp_metadata();
 
         metadata.num_blocks = 10;
-        metadata.parent_hash = vec![0, 1, 2, 3];
+        metadata.last_block_chain_hash = vec![0, 1, 2, 3];
 
         // Call the save method
         metadata
@@ -746,10 +748,16 @@ mod tests {
 
         // Assert that the metadata fields are correctly deserialized
         assert_eq!(deserialized_metadata.num_blocks, 10);
-        assert_eq!(deserialized_metadata.parent_hash, metadata.parent_hash);
+        assert_eq!(
+            deserialized_metadata.last_block_chain_hash,
+            metadata.last_block_chain_hash
+        );
 
         // Assert that the deserialized metadata matches the original metadata
         assert_eq!(deserialized_metadata.num_blocks, 10);
-        assert_eq!(deserialized_metadata.parent_hash, metadata.parent_hash);
+        assert_eq!(
+            deserialized_metadata.last_block_chain_hash,
+            metadata.last_block_chain_hash
+        );
     }
 }
