@@ -476,6 +476,10 @@ where
     pub fn get_latest_block_hash(&self) -> Vec<u8> {
         self.metadata.borrow().get_last_block_chain_hash().to_vec()
     }
+
+    pub fn get_next_block_write_position(&self) -> usize {
+        self.metadata.borrow().next_block_write_position
+    }
 }
 
 #[cfg(test)]
