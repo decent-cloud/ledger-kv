@@ -473,6 +473,10 @@ where
         })
     }
 
+    pub fn num_blocks(&self) -> usize {
+        self.metadata.borrow().num_blocks
+    }
+
     pub fn get_latest_block_hash(&self) -> Vec<u8> {
         self.metadata.borrow().get_last_block_chain_hash().to_vec()
     }
