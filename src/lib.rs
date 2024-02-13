@@ -159,7 +159,7 @@ impl Metadata {
         Ok(())
     }
 
-    fn append_entries(&mut self, parent_hash: &[u8], position: usize) -> anyhow::Result<()> {
+    fn append_block(&mut self, parent_hash: &[u8], position: usize) -> anyhow::Result<()> {
         // let md: &mut Metadata = &mut *self.borrow_mut();
         self.num_blocks += 1;
         self.last_block_chain_hash = parent_hash.to_vec();
@@ -267,7 +267,7 @@ where
             + serialized_data.len();
         self.metadata
             .borrow_mut()
-            .append_entries(&ledger_block.hash, next_write_position)
+            .append_block(&ledger_block.hash, next_write_position)
     }
 
     fn _journal_read_block(&self, offset: u64) -> Result<(u64, LedgerBlock<TL>), ErrorBlockRead> {
