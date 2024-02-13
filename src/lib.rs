@@ -205,6 +205,11 @@ pub struct LedgerKV<TL> {
     entry_hash2offset: IndexMap<Key, usize>,
 }
 
+enum ErrorBlockRead {
+    Empty,
+    Corrupted(anyhow::Error),
+}
+
 impl<TL> LedgerKV<TL>
 where
     TL: Debug + BorshSerialize + BorshDeserialize + Clone + Eq + std::hash::Hash,
@@ -265,20 +270,28 @@ where
             .append_entries(&ledger_block.hash, next_write_position)
     }
 
-    fn _journal_read_block(&self, offset: u64) -> anyhow::Result<(u64, LedgerBlock<TL>)> {
+    fn _journal_read_block(&self, offset: u64) -> Result<(u64, LedgerBlock<TL>), ErrorBlockRead> {
         info!("Reading journal block at offset {}", offset);
 
         // Find out how many bytes we need to read ==> block len in bytes
         let mut buf = [0u8; std::mem::size_of::<usize>()];
-        persistent_storage_read64(offset, &mut buf)?;
+        persistent_storage_read64(offset, &mut buf)
+            .map_err(|err| ErrorBlockRead::Corrupted(err))?;
         let block_len: usize = usize::from_le_bytes(buf);
         debug!("read bytes: {:?}", buf);
         debug!("block_len: {}", block_len);
 
+        if block_len == 0 {
+            return Err(ErrorBlockRead::Empty);
+        }
+
         // Read the block as raw bytes
         let mut buf = vec![0u8; block_len];
-        persistent_storage_read64(offset + std::mem::size_of::<usize>() as u64, &mut buf)?;
-        match LedgerBlock::deserialize(&mut buf.as_ref()).map_err(|err| err.into()) {
+        persistent_storage_read64(offset + std::mem::size_of::<usize>() as u64, &mut buf)
+            .map_err(|err| ErrorBlockRead::Corrupted(err))?;
+        match LedgerBlock::deserialize(&mut buf.as_ref())
+            .map_err(|err| ErrorBlockRead::Corrupted(err.into()))
+        {
             Ok(block) => Ok((
                 offset + std::mem::size_of::<usize>() as u64 + block_len as u64,
                 block,
@@ -378,17 +391,13 @@ where
         self.metadata
             .borrow_mut()
             .update_from_persistent_storage()?;
-        let num_blocks = self.metadata.borrow().num_blocks;
-        info!(
-            "Total blocks in ledger: {}",
-            self.metadata.borrow().num_blocks
-        );
 
         let mut parent_hash = Vec::new();
         let mut updates = Vec::new();
         // Step 1: Read all Ledger Blocks
-        for ledger_block in self.iter_raw(num_blocks) {
+        for ledger_block in self.iter_raw() {
             let ledger_block = ledger_block?;
+
             // Update the in-memory IndexMap of entries, used for quick lookups
             let expected_hash =
                 Self::_compute_block_chain_hash(&parent_hash, &ledger_block.entries)?;
@@ -453,15 +462,13 @@ where
             .into_iter()
     }
 
-    pub fn iter_raw(
-        &self,
-        num_blocks: usize,
-    ) -> impl Iterator<Item = anyhow::Result<LedgerBlock<TL>>> + '_ {
+    pub fn iter_raw(&self) -> impl Iterator<Item = anyhow::Result<LedgerBlock<TL>>> + '_ {
         let data_start = partition_table::get_data_partition().start_lba;
-        (0..num_blocks).scan(data_start, |state, _| {
+        (0..).scan(data_start, |state, _| {
             let (offset_next, ledger_block) = match self._journal_read_block(*state) {
                 Ok(block) => block,
-                Err(err) => {
+                Err(ErrorBlockRead::Empty) => return None,
+                Err(ErrorBlockRead::Corrupted(err)) => {
                     return Some(Err(anyhow::format_err!(
                         "Failed to read Ledger block: {}",
                         err
