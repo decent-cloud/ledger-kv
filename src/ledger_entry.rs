@@ -62,12 +62,12 @@ impl<TL> std::fmt::Display for LedgerEntry<TL> {
 #[derive(BorshSerialize, BorshDeserialize, Clone, PartialEq, Eq, Debug)]
 pub struct LedgerBlock<TL> {
     pub(crate) entries: Vec<LedgerEntry<TL>>,
-    pub(crate) offset: usize,
+    pub(crate) offset: u64,
     pub(crate) hash: Vec<u8>,
 }
 
 impl<TL> LedgerBlock<TL> {
-    pub(crate) fn new(entries: Vec<LedgerEntry<TL>>, offset: usize, hash: Vec<u8>) -> Self {
+    pub(crate) fn new(entries: Vec<LedgerEntry<TL>>, offset: u64, hash: Vec<u8>) -> Self {
         LedgerBlock {
             entries,
             offset,

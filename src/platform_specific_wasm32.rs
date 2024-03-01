@@ -60,12 +60,13 @@ pub fn persistent_storage_size_bytes() -> u64 {
 }
 
 pub fn persistent_storage_read64(offset: u64, buf: &mut [u8]) -> anyhow::Result<()> {
+    ic_cdk::api::stable::stable64_read(offset, buf);
     info!(
-        "Reading {} bytes from persistent storage @offset {}.",
+        "Reading {} bytes from persistent storage @offset 0x{:0x}",
         buf.len(),
         offset
     );
-    Ok(ic_cdk::api::stable::stable64_read(offset, buf))
+    Ok(())
 }
 
 pub fn persistent_storage_write64(offset: u64, buf: &[u8]) {
@@ -82,7 +83,7 @@ pub fn persistent_storage_write64(offset: u64, buf: &[u8]) {
         );
     }
     info!(
-        "Writing {} bytes to persistent storage @offset {}.",
+        "Writing {} bytes to persistent storage @offset 0x{:0x}",
         buf.len(),
         offset
     );

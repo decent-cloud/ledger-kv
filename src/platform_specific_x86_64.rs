@@ -65,7 +65,7 @@ pub fn persistent_storage_read64(offset: u64, buf: &mut [u8]) -> anyhow::Result<
             Some(file) => {
                 let file_size_bytes = file.metadata().unwrap().len();
                 debug!(
-                    "Reading from persistent storage {:?} @ {} .. {}",
+                    "Reading from persistent storage {:?} @ 0x{:0x} .. 0x{:0x}",
                     file.path(),
                     offset,
                     offset + buf.len() as u64
@@ -108,10 +108,9 @@ pub fn persistent_storage_write64(offset: u64, buf: &[u8]) {
                     );
                 }
                 debug!(
-                    "Writing {} bytes to persistent storage @offset {}: {:?}",
+                    "Writing {} bytes to persistent storage @offset 0x{:0x}",
                     buf.len(),
-                    offset,
-                    buf
+                    offset
                 );
                 file.seek(std::io::SeekFrom::Start(offset)).unwrap();
                 file.write_all(buf)
