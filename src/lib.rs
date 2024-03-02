@@ -129,69 +129,19 @@ impl Metadata {
         self.next_block_write_position = partition_table::get_data_partition().start_lba;
     }
 
-    /// Refreshes (re-reads) the metadata by reading from the persistent storage.
-    fn update_from_persistent_storage(&mut self) -> anyhow::Result<()> {
-        let metadata_bytes = self._read_raw_metadata_bytes()?;
-
-        info!(
-            "Read {} bytes from persistent storage",
-            metadata_bytes.len()
-        );
-
-        if metadata_bytes.is_empty() {
-            self.num_blocks = 0;
-            self.last_block_chain_hash = Vec::new();
-            self.next_block_write_position = partition_table::get_data_partition().start_lba;
-        } else {
-            let deserialized_metadata: Metadata =
-                Metadata::deserialize(&mut metadata_bytes.as_ref())?;
-            self.num_blocks = deserialized_metadata.num_blocks;
-            self.last_block_chain_hash = deserialized_metadata.last_block_chain_hash;
-            self.next_block_write_position = deserialized_metadata.next_block_write_position;
-        }
-
-        debug!(
-            "Read metadata of {} blocks; next_block_write_position: 0x{:x}",
-            self.num_blocks, self.next_block_write_position
-        );
-        Ok(())
-    }
-
-    fn append_block(&mut self, parent_hash: &[u8], position: u64) -> anyhow::Result<()> {
-        // let md: &mut Metadata = &mut *self.borrow_mut();
+    pub fn append_block(
+        &mut self,
+        parent_hash: &[u8],
+        next_block_write_position: u64,
+    ) -> anyhow::Result<()> {
         self.num_blocks += 1;
         self.last_block_chain_hash = parent_hash.to_vec();
-        self.next_block_write_position = position;
-        let metadata_bytes = to_vec(self).expect("Failed to serialize metadata");
-        self._save_raw_metadata_bytes(&metadata_bytes)?;
-        self.update_from_persistent_storage()
+        self.next_block_write_position = next_block_write_position;
+        Ok(())
     }
 
     fn get_last_block_chain_hash(&self) -> &[u8] {
         self.last_block_chain_hash.as_slice()
-    }
-
-    fn _read_raw_metadata_bytes(&self) -> anyhow::Result<Vec<u8>> {
-        let part_entry = partition_table::get_metadata_partition();
-        if part_entry.start_lba >= persistent_storage_size_bytes() {
-            return Err(anyhow::format_err!(
-                "Metadata partition beyond the end of persistent storage."
-            ));
-        }
-        let mut buf = [0u8; std::mem::size_of::<Metadata>() * 10];
-        persistent_storage_read64(part_entry.start_lba, &mut buf)?;
-        Ok(buf.to_vec())
-    }
-
-    fn _save_raw_metadata_bytes(&self, metadata_bytes: &[u8]) -> anyhow::Result<()> {
-        let part_entry = partition_table::get_metadata_partition();
-        info!(
-            "Saving metadata to {} bytes at offset 0x{:0x}",
-            metadata_bytes.len(),
-            part_entry.start_lba
-        );
-        persistent_storage_write64(part_entry.start_lba, metadata_bytes);
-        Ok(())
     }
 }
 
@@ -268,7 +218,7 @@ where
             .append_block(&ledger_block.hash, next_write_position)
     }
 
-    fn _journal_read_block(&self, offset: u64) -> Result<(u64, LedgerBlock<TL>), ErrorBlockRead> {
+    fn _journal_read_block(&self, offset: u64) -> Result<LedgerBlock<TL>, ErrorBlockRead> {
         // Find out how many bytes we need to read ==> block len in bytes
         let mut buf = [0u8; std::mem::size_of::<u32>()];
         persistent_storage_read64(offset, &mut buf)
@@ -293,10 +243,11 @@ where
         match LedgerBlock::deserialize(&mut buf.as_ref())
             .map_err(|err| ErrorBlockRead::Corrupted(err.into()))
         {
-            Ok(block) => Ok((
-                offset + std::mem::size_of::<u32>() as u64 + block_len as u64,
-                block,
-            )),
+            Ok(mut block) => {
+                block.offset_next =
+                    Some(offset + std::mem::size_of::<u32>() as u64 + block_len as u64);
+                Ok(block)
+            }
             Err(err) => Err(err),
         }
     }
@@ -326,6 +277,7 @@ where
             let block = LedgerBlock::new(
                 block_entries,
                 self.metadata.borrow().next_block_write_position,
+                None,
                 hash,
             );
             self._journal_append_block(block)?;
@@ -389,10 +341,6 @@ where
 
         let mut entries_hash2offset = IndexMap::new();
 
-        self.metadata
-            .borrow_mut()
-            .update_from_persistent_storage()?;
-
         let mut parent_hash = Vec::new();
         let mut updates = Vec::new();
         // Step 1: Read all Ledger Blocks
@@ -412,6 +360,11 @@ where
 
             parent_hash.clear();
             parent_hash.extend_from_slice(&ledger_block.hash);
+
+            self.metadata.borrow_mut().append_block(
+                parent_hash.as_slice(),
+                ledger_block.offset_next.expect("offset must be set"),
+            )?;
 
             updates.push(ledger_block);
         }
@@ -466,7 +419,7 @@ where
     pub fn iter_raw(&self) -> impl Iterator<Item = anyhow::Result<LedgerBlock<TL>>> + '_ {
         let data_start = partition_table::get_data_partition().start_lba;
         (0..).scan(data_start, |state, _| {
-            let (offset_next, ledger_block) = match self._journal_read_block(*state) {
+            let ledger_block = match self._journal_read_block(*state) {
                 Ok(block) => block,
                 Err(ErrorBlockRead::Empty) => return None,
                 Err(ErrorBlockRead::Corrupted(err)) => {
@@ -476,7 +429,7 @@ where
                     )))
                 }
             };
-            *state = offset_next;
+            *state = ledger_block.offset_next.expect("offset_next must be set");
             Some(Ok(ledger_block))
         })
     }
@@ -559,6 +512,7 @@ mod tests {
                 Operation::Upsert,
             )],
             0,
+            None,
             vec![],
         );
         let cumulative_hash =
