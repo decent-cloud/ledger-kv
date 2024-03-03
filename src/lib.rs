@@ -256,7 +256,7 @@ where
             return Err(ErrorBlockRead::Empty);
         }
 
-        info!(
+        debug!(
             "Reading journal block of {} bytes at offset 0x{:0x}",
             block_len, offset
         );
@@ -265,7 +265,6 @@ where
         let mut buf = vec![0u8; block_len as usize];
         persistent_storage_read64(offset + std::mem::size_of::<u32>() as u64, &mut buf)
             .map_err(|err| ErrorBlockRead::Corrupted(err))?;
-        info!("read bytes: {:?}", buf);
         match LedgerBlock::deserialize(&mut buf.as_ref())
             .map_err(|err| ErrorBlockRead::Corrupted(err.into()))
         {
@@ -372,11 +371,6 @@ where
         // Step 1: Read all Ledger Blocks
         for ledger_block in self.iter_raw() {
             let ledger_block = ledger_block?;
-
-            println!(
-                "ledger block w/ timestamp {}: {:?}",
-                ledger_block.timestamp, ledger_block
-            );
 
             // Update the in-memory IndexMap of entries, used for quick lookups
             let expected_hash = Self::_compute_block_chain_hash(

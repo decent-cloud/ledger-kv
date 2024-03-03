@@ -97,12 +97,15 @@ where
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         write!(
             f,
-            "offset 0x{:x} offset_next {:x?} timestamp {}",
-            self.offset, self.offset_next, self.timestamp
+            "[{}] ~-=-~-=-~-=-~ Ledger block at offsets 0x{:x} .. {:x?} hash {}",
+            self.timestamp,
+            self.offset,
+            self.offset_next,
+            hex::encode(self.hash.as_slice())
         )?;
         for entry in &self.entries {
-            write!(f, "\n{}", entry)?
+            write!(f, "\n[{}] {}", self.timestamp, entry)?
         }
-        write!(f, "\nHash: {}", hex::encode(self.hash.as_slice()))
+        Ok(())
     }
 }

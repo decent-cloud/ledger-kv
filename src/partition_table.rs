@@ -231,7 +231,7 @@ impl PartitionTable {
                 break;
             }
         }
-        info!("Restored Partition Table: {}", self);
+        debug!("Restored Partition Table: {}", self);
 
         Ok(self)
     }
