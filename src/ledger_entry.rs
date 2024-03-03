@@ -1,3 +1,5 @@
+use base64::engine::general_purpose::STANDARD as BASE64;
+use base64::Engine;
 use borsh::{BorshDeserialize, BorshSerialize};
 
 /// Enum defining the different operations that can be performed on entries.
@@ -45,17 +47,15 @@ impl<TL> LedgerEntry<TL> {
 /// Implements the `Display` trait for `LedgerEntry`.
 impl<TL> std::fmt::Display for LedgerEntry<TL> {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        if let Ok(key) = String::from_utf8(self.key.to_owned()) {
-            if let Ok(value) = String::from_utf8(self.value.to_owned()) {
-                return write!(f, "Key: {}, Value: {}", key, value);
-            }
-        }
-        write!(
-            f,
-            "Key: {}, Value: {}",
-            String::from_utf8_lossy(&self.key),
-            String::from_utf8_lossy(&self.value)
-        )
+        let key = match String::from_utf8(self.key.clone()) {
+            Ok(v) => v,
+            Err(_) => BASE64.encode(self.key.clone()),
+        };
+        let value = match String::from_utf8(self.value.clone()) {
+            Ok(v) => v,
+            Err(_) => BASE64.encode(self.value.clone()),
+        };
+        write!(f, "Key: {}, Value: {}", key, value)
     }
 }
 
