@@ -85,8 +85,6 @@ use crate::platform_specific::{
 pub use platform_specific::override_backing_file;
 pub use platform_specific::{export_debug, export_error, export_info, export_warn};
 
-use std::{collections::HashMap, hash::BuildHasherDefault};
-pub type AHashMap<K, V> = HashMap<K, V, BuildHasherDefault<ahash::AHasher>>;
 use borsh::{to_vec, BorshDeserialize, BorshSerialize};
 use indexmap::IndexMap;
 pub use ledger_entry::{Key, LedgerBlock, LedgerEntry, Operation, Value};
@@ -149,7 +147,7 @@ impl Metadata {
 pub struct LedgerKV<TL> {
     metadata: RefCell<Metadata>,
     entries_next_block: IndexMap<Key, LedgerEntry<TL>>,
-    entries: AHashMap<TL, IndexMap<Key, LedgerEntry<TL>>>,
+    entries: IndexMap<TL, IndexMap<Key, LedgerEntry<TL>>>,
     get_timestamp_nanos: fn() -> u64,
 }
 
@@ -166,7 +164,7 @@ where
         LedgerKV {
             metadata: RefCell::new(Metadata::new()),
             entries_next_block: IndexMap::new(),
-            entries: AHashMap::default(),
+            entries: IndexMap::new(),
             get_timestamp_nanos: platform_specific::get_timestamp_nanos,
         }
         .refresh_ledger()
