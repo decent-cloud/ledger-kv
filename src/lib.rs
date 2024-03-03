@@ -150,7 +150,6 @@ pub struct LedgerKV<TL> {
     metadata: RefCell<Metadata>,
     entries_next_block: IndexMap<Key, LedgerEntry<TL>>,
     entries: AHashMap<TL, IndexMap<Key, LedgerEntry<TL>>>,
-    entry_hash2offset: IndexMap<Key, u64>,
     get_timestamp_nanos: fn() -> u64,
 }
 
@@ -168,7 +167,6 @@ where
             metadata: RefCell::new(Metadata::new()),
             entries_next_block: IndexMap::new(),
             entries: AHashMap::default(),
-            entry_hash2offset: IndexMap::new(),
             get_timestamp_nanos: platform_specific::get_timestamp_nanos,
         }
         .refresh_ledger()
@@ -342,7 +340,6 @@ where
     pub fn refresh_ledger(mut self) -> anyhow::Result<LedgerKV<TL>> {
         self.metadata.borrow_mut().clear();
         self.entries.clear();
-        self.entry_hash2offset.clear();
 
         // If the backend is empty or non-existing, just return
         if persistent_storage_size_bytes() == 0 {
@@ -355,8 +352,6 @@ where
             warn!("No data found in persistent storage");
             return Ok(self);
         }
-
-        let mut entries_hash2offset = IndexMap::new();
 
         let mut parent_hash = Vec::new();
         let mut updates = Vec::new();
@@ -414,7 +409,6 @@ where
                 match &ledger_entry.operation {
                     Operation::Upsert => {
                         entries.insert(ledger_entry.key.clone(), ledger_entry.clone());
-                        entries_hash2offset.insert(ledger_block.hash.to_vec(), ledger_block.offset);
                     }
                     Operation::Delete => {
                         entries.swap_remove(&ledger_entry.key);
@@ -422,8 +416,6 @@ where
                 }
             }
         }
-
-        self.entry_hash2offset = entries_hash2offset;
 
         Ok(self)
     }
