@@ -97,3 +97,7 @@ pub fn persistent_storage_grow64(additional_pages: u64) -> Result<u64, String> {
     );
     ic_cdk::api::stable::stable64_grow(additional_pages).map_err(|err| format!("{:?}", err))
 }
+
+pub(crate) fn get_timestamp_nanos() -> u64 {
+    ic_cdk::api::time()
+}

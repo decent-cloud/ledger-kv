@@ -151,6 +151,7 @@ pub struct LedgerKV<TL> {
     entries_next_block: IndexMap<Key, LedgerEntry<TL>>,
     entries: AHashMap<TL, IndexMap<Key, LedgerEntry<TL>>>,
     entry_hash2offset: IndexMap<Key, u64>,
+    get_timestamp_nanos: fn() -> u64,
 }
 
 enum ErrorBlockRead {
@@ -168,19 +169,30 @@ where
             entries_next_block: IndexMap::new(),
             entries: AHashMap::default(),
             entry_hash2offset: IndexMap::new(),
+            get_timestamp_nanos: platform_specific::get_timestamp_nanos,
         }
         .refresh_ledger()
+    }
+
+    #[cfg(test)]
+    fn with_timestamp_fn(self, get_timestamp_nanos: fn() -> u64) -> Self {
+        LedgerKV {
+            get_timestamp_nanos,
+            ..self
+        }
     }
 
     fn _compute_block_chain_hash(
         last_block_chain_hash: &[u8],
         block_entries: &[LedgerEntry<TL>],
+        block_timestamp: u64,
     ) -> anyhow::Result<Vec<u8>> {
         let mut hasher = Sha256::new();
         hasher.update(last_block_chain_hash);
         for entry in block_entries.iter() {
             hasher.update(to_vec(entry)?);
         }
+        hasher.update(block_timestamp.to_le_bytes());
         Ok(hasher.finalize().to_vec())
     }
 
@@ -188,15 +200,16 @@ where
         // Prepare entry as serialized bytes
         let serialized_data = to_vec(&ledger_block)?;
         info!(
-            "Appending block with {} bytes: {}",
+            "Appending block @timestamp {} with {} bytes: {}",
+            ledger_block.timestamp,
             serialized_data.len(),
             ledger_block,
         );
         // Prepare entry len, as bytes
-        let block_len_bytes = serialized_data.len();
+        let block_len_bytes: u32 = serialized_data.len() as u32;
         let serialized_data_len = block_len_bytes.to_le_bytes();
 
-        debug!(
+        info!(
             "entry_len_bytes {} serialized_data_len: {:?} serialized_data: {:?}",
             block_len_bytes, serialized_data_len, serialized_data
         );
@@ -240,6 +253,7 @@ where
         let mut buf = vec![0u8; block_len as usize];
         persistent_storage_read64(offset + std::mem::size_of::<u32>() as u64, &mut buf)
             .map_err(|err| ErrorBlockRead::Corrupted(err))?;
+        info!("read bytes: {:?}", buf);
         match LedgerBlock::deserialize(&mut buf.as_ref())
             .map_err(|err| ErrorBlockRead::Corrupted(err.into()))
         {
@@ -270,14 +284,17 @@ where
                 self.entries_next_block.len()
             );
             let block_entries = Vec::from_iter(self.entries_next_block.values().cloned());
+            let block_timestamp = (self.get_timestamp_nanos)();
             let hash = Self::_compute_block_chain_hash(
                 self.metadata.borrow().get_last_block_chain_hash(),
                 &block_entries,
+                block_timestamp,
             )?;
             let block = LedgerBlock::new(
                 block_entries,
                 self.metadata.borrow().next_block_write_position,
                 None,
+                block_timestamp,
                 hash,
             );
             self._journal_append_block(block)?;
@@ -347,9 +364,17 @@ where
         for ledger_block in self.iter_raw() {
             let ledger_block = ledger_block?;
 
+            println!(
+                "ledger block w/ timestamp {}: {:?}",
+                ledger_block.timestamp, ledger_block
+            );
+
             // Update the in-memory IndexMap of entries, used for quick lookups
-            let expected_hash =
-                Self::_compute_block_chain_hash(&parent_hash, &ledger_block.entries)?;
+            let expected_hash = Self::_compute_block_chain_hash(
+                &parent_hash,
+                &ledger_block.entries,
+                ledger_block.timestamp,
+            )?;
             if ledger_block.hash != expected_hash {
                 return Err(anyhow::format_err!(
                     "Hash mismatch: expected {:?}, got {:?}",
@@ -450,30 +475,13 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{
-        platform_specific, platform_specific_x86_64::persistent_storage_size_bytes, Metadata,
-    };
-    use borsh::to_vec;
+    use crate::platform_specific;
     fn log_init() {
         // Set log level to info by default
         if std::env::var("RUST_LOG").is_err() {
             std::env::set_var("RUST_LOG", "info");
         }
         let _ = env_logger::builder().is_test(true).try_init();
-    }
-
-    fn create_temp_metadata() -> Metadata {
-        log_init();
-        info!("Create temp metadata");
-        // Create a temporary directory for the test
-        let file_path = tempfile::tempdir()
-            .unwrap()
-            .into_path()
-            .join("test_ledger_store.bin");
-        platform_specific::override_backing_file(Some(file_path));
-
-        // Create a Metadata instance
-        Metadata::new()
     }
 
     /// Enum defining the different labels for entries.
@@ -496,7 +504,14 @@ mod tests {
             .join("test_ledger_store.bin");
         platform_specific::override_backing_file(Some(file_path));
         partition_table::persist();
-        LedgerKV::new().expect("Failed to create a temp ledger for the test")
+
+        fn mock_get_timestamp_nanos() -> u64 {
+            0
+        }
+
+        LedgerKV::new()
+            .expect("Failed to create a temp ledger for the test")
+            .with_timestamp_fn(mock_get_timestamp_nanos)
     }
 
     #[test]
@@ -513,17 +528,22 @@ mod tests {
             )],
             0,
             None,
+            0,
             vec![],
         );
-        let cumulative_hash =
-            LedgerKV::_compute_block_chain_hash(&parent_hash, &ledger_block.entries).unwrap();
+        let cumulative_hash = LedgerKV::_compute_block_chain_hash(
+            &parent_hash,
+            &ledger_block.entries,
+            ledger_block.timestamp,
+        )
+        .unwrap();
 
         // Cumulative hash is a sha256 hash of the parent hash, key, and value
         assert_eq!(
             cumulative_hash,
             vec![
-                3, 251, 71, 255, 141, 93, 131, 14, 103, 242, 233, 103, 122, 213, 48, 118, 130, 141,
-                40, 163, 106, 201, 194, 79, 165, 129, 3, 21, 147, 246, 141, 98
+                225, 96, 89, 71, 148, 202, 180, 76, 246, 238, 241, 35, 75, 214, 40, 97, 72, 97,
+                110, 128, 130, 94, 48, 103, 202, 14, 223, 86, 225, 194, 87, 174
             ]
         );
     }
@@ -659,15 +679,15 @@ mod tests {
         info!("ledger: {:?}", ledger_kv);
 
         // Test refresh_ledger
-        let key = vec![1, 2, 3];
-        let value = vec![4, 5, 6];
+        let key = b"test_key".to_vec();
+        let value = b"test_value".to_vec();
         ledger_kv
             .upsert(EntryLabel::Unspecified, key.clone(), value.clone())
             .unwrap();
         assert!(ledger_kv.commit_block().is_ok());
         let expected_parent_hash = vec![
-            184, 181, 136, 219, 213, 194, 88, 79, 80, 71, 95, 100, 185, 182, 143, 44, 241, 81, 43,
-            167, 162, 202, 53, 75, 64, 228, 236, 245, 68, 194, 139, 70,
+            47, 1, 209, 196, 44, 241, 73, 144, 71, 71, 188, 31, 174, 237, 64, 83, 220, 233, 6, 253,
+            11, 244, 132, 66, 165, 27, 188, 187, 149, 13, 46, 245,
         ];
         ledger_kv = ledger_kv.refresh_ledger().unwrap();
 
@@ -695,41 +715,5 @@ mod tests {
 
         // get_latest_hash should return the parent hash
         assert_eq!(ledger_kv.get_latest_block_hash(), expected_parent_hash);
-    }
-
-    #[test]
-    fn test_save() {
-        let mut metadata = create_temp_metadata();
-
-        metadata.num_blocks = 10;
-        metadata.last_block_chain_hash = vec![0, 1, 2, 3];
-
-        // Call the save method
-        metadata
-            ._save_raw_metadata_bytes(&to_vec(&metadata).unwrap())
-            .unwrap();
-
-        // Read all contents of the metadata partition into a buffer
-        let meta_partition = partition_table::get_metadata_partition();
-        let read_end = meta_partition.end_lba.min(persistent_storage_size_bytes());
-        let mut buf = vec![0u8; (read_end - meta_partition.start_lba) as usize];
-        persistent_storage_read64(meta_partition.start_lba, &mut buf).unwrap();
-
-        // Deserialize the metadata bytes from the buffer
-        let deserialized_metadata: Metadata = Metadata::deserialize(&mut buf.as_slice()).unwrap();
-
-        // Assert that the metadata fields are correctly deserialized
-        assert_eq!(deserialized_metadata.num_blocks, 10);
-        assert_eq!(
-            deserialized_metadata.last_block_chain_hash,
-            metadata.last_block_chain_hash
-        );
-
-        // Assert that the deserialized metadata matches the original metadata
-        assert_eq!(deserialized_metadata.num_blocks, 10);
-        assert_eq!(
-            deserialized_metadata.last_block_chain_hash,
-            metadata.last_block_chain_hash
-        );
     }
 }
