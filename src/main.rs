@@ -60,6 +60,15 @@ pub enum EntryLabel {
     NodeProvider,
 }
 
+impl std::fmt::Display for EntryLabel {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            EntryLabel::Unspecified => write!(f, "Unspecified"),
+            EntryLabel::NodeProvider => write!(f, "NodeProvider"),
+        }
+    }
+}
+
 fn logs_init() {
     // Set log level to info by default
     if std::env::var("RUST_LOG").is_err() {

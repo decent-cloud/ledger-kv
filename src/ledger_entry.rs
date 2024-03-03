@@ -45,7 +45,10 @@ impl<TL> LedgerEntry<TL> {
 }
 
 /// Implements the `Display` trait for `LedgerEntry`.
-impl<TL> std::fmt::Display for LedgerEntry<TL> {
+impl<TL> std::fmt::Display for LedgerEntry<TL>
+where
+    TL: std::fmt::Display,
+{
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         let key = match String::from_utf8(self.key.clone()) {
             Ok(v) => v,
@@ -55,7 +58,7 @@ impl<TL> std::fmt::Display for LedgerEntry<TL> {
             Ok(v) => v,
             Err(_) => BASE64.encode(self.value.clone()),
         };
-        write!(f, "Key: {}, Value: {}", key, value)
+        write!(f, "[{}] Key: {}, Value: {}", self.label, key, value)
     }
 }
 
@@ -87,7 +90,10 @@ impl<TL> LedgerBlock<TL> {
 }
 
 /// Implements the `Display` trait for `LedgerBlock`.
-impl<TL> std::fmt::Display for LedgerBlock<TL> {
+impl<TL> std::fmt::Display for LedgerBlock<TL>
+where
+    TL: std::fmt::Display,
+{
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         write!(
             f,

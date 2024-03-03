@@ -30,6 +30,16 @@
 //!     Label2,
 //! }
 //!
+//! impl std::fmt::Display for EntryLabel {
+//!     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+//!         match self {
+//!             EntryLabel::Unspecified => write!(f, "Unspecified"),
+//!             EntryLabel::Label1 => write!(f, "Label1"),
+//!             EntryLabel::Label2 => write!(f, "Label2"),
+//!         }
+//!     }
+//! }
+//!
 //! // Optional: Override the backing file path
 //! // let ledger_path = PathBuf::from("/tmp/ledger_kv/test_data.bin");
 //! // platform_specific::override_backing_file(Some(ledger_path));
@@ -158,7 +168,13 @@ enum ErrorBlockRead {
 
 impl<TL> LedgerKV<TL>
 where
-    TL: Debug + BorshSerialize + BorshDeserialize + Clone + Eq + std::hash::Hash,
+    TL: Debug
+        + std::fmt::Display
+        + BorshSerialize
+        + BorshDeserialize
+        + Clone
+        + Eq
+        + std::hash::Hash,
 {
     pub fn new() -> anyhow::Result<Self> {
         LedgerKV {
@@ -481,9 +497,25 @@ mod tests {
         NodeProvider,
     }
 
+    impl std::fmt::Display for EntryLabel {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            match self {
+                EntryLabel::Unspecified => write!(f, "Unspecified"),
+                EntryLabel::NodeProvider => write!(f, "NodeProvider"),
+            }
+        }
+    }
+
     fn new_temp_ledger<TL>() -> LedgerKV<TL>
     where
-        TL: BorshSerialize + BorshDeserialize + Clone + PartialEq + Eq + Debug + std::hash::Hash,
+        TL: BorshSerialize
+            + BorshDeserialize
+            + Clone
+            + PartialEq
+            + Eq
+            + Debug
+            + std::hash::Hash
+            + std::fmt::Display,
     {
         log_init();
         info!("Create temp ledger");
