@@ -22,24 +22,6 @@
 //! use ledger_kv::{platform_specific, LedgerKV, Operation};
 //! use borsh::{BorshDeserialize, BorshSerialize};
 //!
-//! /// Enum defining the different labels for entries.
-//! #[derive(BorshSerialize, BorshDeserialize, Clone, PartialEq, Eq, Debug, Hash)]
-//! pub enum EntryLabel {
-//!     Unspecified,
-//!     Label1,
-//!     Label2,
-//! }
-//!
-//! impl std::fmt::Display for EntryLabel {
-//!     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-//!         match self {
-//!             EntryLabel::Unspecified => write!(f, "Unspecified"),
-//!             EntryLabel::Label1 => write!(f, "Label1"),
-//!             EntryLabel::Label2 => write!(f, "Label2"),
-//!         }
-//!     }
-//! }
-//!
 //! // Optional: Override the backing file path
 //! // let ledger_path = PathBuf::from("/tmp/ledger_kv/test_data.bin");
 //! // platform_specific::override_backing_file(Some(ledger_path));
@@ -48,27 +30,27 @@
 //! let mut ledger_kv = LedgerKV::new().expect("Failed to create LedgerKV");
 //!
 //! // Insert a few new entries, each with a separate label
-//! ledger_kv.upsert(EntryLabel::Label1, b"key1".to_vec(), b"value1".to_vec()).unwrap();
-//! ledger_kv.upsert(EntryLabel::Label2, b"key2".to_vec(), b"value2".to_vec()).unwrap();
+//! ledger_kv.upsert("Label1", b"key1".to_vec(), b"value1".to_vec()).unwrap();
+//! ledger_kv.upsert("Label2", b"key2".to_vec(), b"value2".to_vec()).unwrap();
 //! ledger_kv.commit_block().unwrap();
 //!
 //! // Retrieve all entries
 //! let entries = ledger_kv.iter(None).collect::<Vec<_>>();
 //! println!("All entries: {:?}", entries);
-//! // Label1 entries
-//! let entries = ledger_kv.iter(Some(EntryLabel::Label1)).collect::<Vec<_>>();
+//! // Only entries with the Label1 label
+//! let entries = ledger_kv.iter(Some("Label1")).collect::<Vec<_>>();
 //! println!("Label1 entries: {:?}", entries);
-//! // Label2 entries
-//! let entries = ledger_kv.iter(Some(EntryLabel::Label2)).collect::<Vec<_>>();
+//! // Only entries with the Label2 label
+//! let entries = ledger_kv.iter(Some("Label2")).collect::<Vec<_>>();
 //! println!("Label2 entries: {:?}", entries);
 //!
 //! // Delete an entry
-//! ledger_kv.delete(EntryLabel::Label1, b"key1".to_vec()).unwrap();
+//! ledger_kv.delete("Label1", b"key1".to_vec()).unwrap();
 //! ledger_kv.commit_block().unwrap();
 //! // Label1 entries are now empty
-//! assert_eq!(ledger_kv.iter(Some(EntryLabel::Label1)).count(), 0);
+//! assert_eq!(ledger_kv.iter(Some("Label1")).count(), 0);
 //! // Label2 entries still exist
-//! assert_eq!(ledger_kv.iter(Some(EntryLabel::Label2)).count(), 1);
+//! assert_eq!(ledger_kv.iter(Some("Label2")).count(), 1);
 //! ```
 
 #[cfg(target_arch = "wasm32")]
@@ -154,10 +136,10 @@ impl Metadata {
 }
 
 #[derive(Debug)]
-pub struct LedgerKV<TL> {
+pub struct LedgerKV {
     metadata: RefCell<Metadata>,
-    entries_next_block: IndexMap<Key, LedgerEntry<TL>>,
-    entries: IndexMap<TL, IndexMap<Key, LedgerEntry<TL>>>,
+    entries_next_block: IndexMap<Key, LedgerEntry>,
+    entries: IndexMap<String, IndexMap<Key, LedgerEntry>>,
     get_timestamp_nanos: fn() -> u64,
 }
 
@@ -166,16 +148,7 @@ enum ErrorBlockRead {
     Corrupted(anyhow::Error),
 }
 
-impl<TL> LedgerKV<TL>
-where
-    TL: Debug
-        + std::fmt::Display
-        + BorshSerialize
-        + BorshDeserialize
-        + Clone
-        + Eq
-        + std::hash::Hash,
-{
+impl LedgerKV {
     pub fn new() -> anyhow::Result<Self> {
         LedgerKV {
             metadata: RefCell::new(Metadata::new()),
@@ -196,7 +169,7 @@ where
 
     fn _compute_block_chain_hash(
         last_block_chain_hash: &[u8],
-        block_entries: &[LedgerEntry<TL>],
+        block_entries: &[LedgerEntry],
         block_timestamp: u64,
     ) -> anyhow::Result<Vec<u8>> {
         let mut hasher = Sha256::new();
@@ -208,7 +181,7 @@ where
         Ok(hasher.finalize().to_vec())
     }
 
-    fn _journal_append_block(&self, ledger_block: LedgerBlock<TL>) -> anyhow::Result<()> {
+    fn _journal_append_block(&self, ledger_block: LedgerBlock) -> anyhow::Result<()> {
         // Prepare entry as serialized bytes
         let serialized_data = to_vec(&ledger_block)?;
         info!(
@@ -243,7 +216,7 @@ where
             .append_block(&ledger_block.hash, next_write_position)
     }
 
-    fn _journal_read_block(&self, offset: u64) -> Result<LedgerBlock<TL>, ErrorBlockRead> {
+    fn _journal_read_block(&self, offset: u64) -> Result<LedgerBlock, ErrorBlockRead> {
         // Find out how many bytes we need to read ==> block len in bytes
         let mut buf = [0u8; std::mem::size_of::<u32>()];
         persistent_storage_read64(offset, &mut buf)
@@ -314,42 +287,56 @@ where
         Ok(())
     }
 
-    pub fn get(&self, label: TL, key: &Key) -> anyhow::Result<Value> {
+    pub fn get<S: AsRef<str>>(&self, label: S, key: &Key) -> anyhow::Result<Value> {
         if let Some(entry) = self.entries_next_block.get(key) {
             match entry.operation {
                 Operation::Upsert => return Ok(entry.value.clone()),
                 Operation::Delete => return Err(anyhow::format_err!("Key not found")),
             }
         }
-        match self.entries.get(&label) {
+        match self.entries.get(label.as_ref()) {
             Some(entries) => entries
                 .get(key)
                 .ok_or(anyhow::format_err!("Key not found"))
                 .map(|e| e.value.clone()),
-            None => Err(anyhow::format_err!("Entry label {:?} not found", label)),
+            None => Err(anyhow::format_err!(
+                "Entry label {:?} not found",
+                label.as_ref()
+            )),
         }
     }
 
-    pub fn upsert(&mut self, label: TL, key: Key, value: Value) -> anyhow::Result<()> {
-        let entry = LedgerEntry::new(label.clone(), key.clone(), value.clone(), Operation::Upsert);
+    pub fn upsert<S: AsRef<str>>(
+        &mut self,
+        label: S,
+        key: Key,
+        value: Value,
+    ) -> anyhow::Result<()> {
+        let entry = LedgerEntry::new(
+            label.as_ref().to_string(),
+            key.clone(),
+            value.clone(),
+            Operation::Upsert,
+        );
 
         self.entries_next_block.insert(key.clone(), entry.clone());
 
-        match self.entries.get_mut(&label) {
+        match self.entries.get_mut(label.as_ref()) {
             Some(entries) => {
                 entries.insert(key, entry);
             }
             None => {
                 let mut new_map = IndexMap::new();
                 new_map.insert(key, entry);
-                self.entries.insert(label, new_map);
+                self.entries.insert(label.as_ref().to_string(), new_map);
             }
         };
 
         Ok(())
     }
 
-    pub fn delete(&mut self, label: TL, key: Key) -> anyhow::Result<()> {
+    pub fn delete<S: AsRef<str>>(&mut self, label: S, key: Key) -> anyhow::Result<()> {
+        let label = label.as_ref().to_string();
         let entry = LedgerEntry::new(label.clone(), key.clone(), Vec::new(), Operation::Delete);
 
         self.entries_next_block.insert(key.clone(), entry);
@@ -366,7 +353,7 @@ where
         Ok(())
     }
 
-    pub fn refresh_ledger(mut self) -> anyhow::Result<LedgerKV<TL>> {
+    pub fn refresh_ledger(mut self) -> anyhow::Result<LedgerKV> {
         self.metadata.borrow_mut().clear();
         self.entries.clear();
 
@@ -416,7 +403,7 @@ where
         // Step 2: Processing the collected data
         for ledger_block in updates.into_iter() {
             for ledger_entry in ledger_block.entries.iter() {
-                let entries = match self.entries.get_mut(&ledger_entry.label) {
+                let entries = match self.entries.get_mut(ledger_entry.label.as_str()) {
                     Some(entries) => entries,
                     None => {
                         let new_map = IndexMap::new();
@@ -444,7 +431,7 @@ where
         Ok(self)
     }
 
-    pub fn iter(&self, label: Option<TL>) -> impl Iterator<Item = &LedgerEntry<TL>> {
+    pub fn iter(&self, label: Option<&str>) -> impl Iterator<Item = &LedgerEntry> {
         self.entries
             .iter()
             .filter(|(entry_label, _entry)| match &label {
@@ -457,7 +444,7 @@ where
             .into_iter()
     }
 
-    pub fn iter_raw(&self) -> impl Iterator<Item = anyhow::Result<LedgerBlock<TL>>> + '_ {
+    pub fn iter_raw(&self) -> impl Iterator<Item = anyhow::Result<LedgerBlock>> + '_ {
         let data_start = partition_table::get_data_partition().start_lba;
         (0..).scan(data_start, |state, _| {
             let ledger_block = match self._journal_read_block(*state) {
@@ -500,33 +487,7 @@ mod tests {
         let _ = env_logger::builder().is_test(true).try_init();
     }
 
-    /// Enum defining the different labels for entries.
-    #[derive(BorshSerialize, BorshDeserialize, Clone, PartialEq, Eq, Debug, Hash)]
-    pub enum EntryLabel {
-        Unspecified,
-        NodeProvider,
-    }
-
-    impl std::fmt::Display for EntryLabel {
-        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-            match self {
-                EntryLabel::Unspecified => write!(f, "Unspecified"),
-                EntryLabel::NodeProvider => write!(f, "NodeProvider"),
-            }
-        }
-    }
-
-    fn new_temp_ledger<TL>() -> LedgerKV<TL>
-    where
-        TL: BorshSerialize
-            + BorshDeserialize
-            + Clone
-            + PartialEq
-            + Eq
-            + Debug
-            + std::hash::Hash
-            + std::fmt::Display,
-    {
+    fn new_temp_ledger() -> LedgerKV {
         log_init();
         info!("Create temp ledger");
         // Create a temporary directory for the test
@@ -553,7 +514,7 @@ mod tests {
         let value = vec![8, 9, 10, 11];
         let ledger_block = LedgerBlock::new(
             vec![LedgerEntry::new(
-                EntryLabel::Unspecified,
+                "Unspecified",
                 key.clone(),
                 value.clone(),
                 Operation::Upsert,
@@ -571,11 +532,12 @@ mod tests {
         .unwrap();
 
         // Cumulative hash is a sha256 hash of the parent hash, key, and value
+        // Obtained from a reference run
         assert_eq!(
             cumulative_hash,
             vec![
-                225, 96, 89, 71, 148, 202, 180, 76, 246, 238, 241, 35, 75, 214, 40, 97, 72, 97,
-                110, 128, 130, 94, 48, 103, 202, 14, 223, 86, 225, 194, 87, 174
+                40, 95, 206, 211, 182, 177, 181, 223, 8, 222, 58, 156, 47, 202, 110, 34, 8, 27, 73,
+                51, 159, 2, 114, 103, 222, 45, 6, 14, 7, 186, 115, 42
             ]
         );
     }
@@ -588,15 +550,15 @@ mod tests {
         let key = vec![1, 2, 3];
         let value = vec![4, 5, 6];
         ledger_kv
-            .upsert(EntryLabel::Unspecified, key.clone(), value.clone())
+            .upsert("Unspecified", key.clone(), value.clone())
             .unwrap();
         println!("partition table {}", partition_table::get_partition_table());
         assert!(ledger_kv.commit_block().is_ok());
-        let entries = ledger_kv.entries.get(&EntryLabel::Unspecified).unwrap();
+        let entries = ledger_kv.entries.get("Unspecified").unwrap();
         assert_eq!(
             entries.get(&key),
             Some(&LedgerEntry::new(
-                EntryLabel::Unspecified,
+                "Unspecified",
                 key,
                 value,
                 Operation::Upsert,
@@ -613,13 +575,13 @@ mod tests {
         let key = vec![1, 2, 3];
         let value = vec![4, 5, 6];
         ledger_kv
-            .upsert(EntryLabel::NodeProvider, key.clone(), value.clone())
+            .upsert("NodeProvider", key.clone(), value.clone())
             .unwrap();
-        let entries = ledger_kv.entries.get(&EntryLabel::NodeProvider).unwrap();
+        let entries = ledger_kv.entries.get("NodeProvider").unwrap();
         assert_eq!(
             entries.get(&key),
             Some(&LedgerEntry::new(
-                EntryLabel::NodeProvider,
+                "NodeProvider",
                 key.clone(),
                 value.clone(),
                 Operation::Upsert,
@@ -634,11 +596,11 @@ mod tests {
         let key = vec![1, 2, 3];
         let value = vec![4, 5, 6];
         ledger_kv
-            .upsert(EntryLabel::Unspecified, key.clone(), value.clone())
+            .upsert("Unspecified", key.clone(), value.clone())
             .unwrap();
 
         // Ensure that the entry is not added to the NodeProvider ledger since the entry_type doesn't match
-        assert_eq!(ledger_kv.entries.get(&EntryLabel::NodeProvider), None);
+        assert_eq!(ledger_kv.entries.get("NodeProvider"), None);
     }
 
     #[test]
@@ -648,14 +610,12 @@ mod tests {
         let key = vec![1, 2, 3];
         let value = vec![4, 5, 6];
         ledger_kv
-            .upsert(EntryLabel::NodeProvider, key.clone(), value.clone())
+            .upsert("NodeProvider", key.clone(), value.clone())
             .unwrap();
-        ledger_kv
-            .delete(EntryLabel::NodeProvider, key.clone())
-            .unwrap();
+        ledger_kv.delete("NodeProvider", key.clone()).unwrap();
 
         // Ensure that the entry is deleted from the ledger since the entry_type matches
-        let entries = ledger_kv.entries.get(&EntryLabel::NodeProvider).unwrap();
+        let entries = ledger_kv.entries.get("NodeProvider").unwrap();
         assert_eq!(entries.get(&key), None);
     }
 
@@ -666,24 +626,22 @@ mod tests {
         let key = vec![1, 2, 3];
         let value = vec![4, 5, 6];
         ledger_kv
-            .upsert(EntryLabel::NodeProvider, key.clone(), value.clone())
+            .upsert("NodeProvider", key.clone(), value.clone())
             .unwrap();
-        ledger_kv
-            .delete(EntryLabel::Unspecified, key.clone())
-            .unwrap();
+        ledger_kv.delete("Unspecified", key.clone()).unwrap();
 
         // Ensure that the entry is not deleted from the ledger since the entry_type doesn't match
-        let entries_np = ledger_kv.entries.get(&EntryLabel::NodeProvider).unwrap();
+        let entries_np = ledger_kv.entries.get("NodeProvider").unwrap();
         assert_eq!(
             entries_np.get(&key),
             Some(&LedgerEntry::new(
-                EntryLabel::NodeProvider,
+                "NodeProvider",
                 key.clone(),
                 value.clone(),
                 Operation::Upsert,
             ))
         );
-        assert_eq!(ledger_kv.entries.get(&EntryLabel::Unspecified), None);
+        assert_eq!(ledger_kv.entries.get("Unspecified"), None);
     }
 
     #[test]
@@ -694,12 +652,10 @@ mod tests {
         let key = vec![1, 2, 3];
         let value = vec![4, 5, 6];
         ledger_kv
-            .upsert(EntryLabel::Unspecified, key.clone(), value.clone())
+            .upsert("Unspecified", key.clone(), value.clone())
             .unwrap();
-        ledger_kv
-            .delete(EntryLabel::Unspecified, key.clone())
-            .unwrap();
-        let entries = ledger_kv.entries.get(&EntryLabel::Unspecified).unwrap();
+        ledger_kv.delete("Unspecified", key.clone()).unwrap();
+        let entries = ledger_kv.entries.get("Unspecified").unwrap();
         assert_eq!(entries.get(&key), None);
     }
 
@@ -714,18 +670,18 @@ mod tests {
         let key = b"test_key".to_vec();
         let value = b"test_value".to_vec();
         ledger_kv
-            .upsert(EntryLabel::Unspecified, key.clone(), value.clone())
+            .upsert("Unspecified", key.clone(), value.clone())
             .unwrap();
         assert!(ledger_kv.commit_block().is_ok());
         let expected_parent_hash = vec![
-            47, 1, 209, 196, 44, 241, 73, 144, 71, 71, 188, 31, 174, 237, 64, 83, 220, 233, 6, 253,
-            11, 244, 132, 66, 165, 27, 188, 187, 149, 13, 46, 245,
+            44, 47, 227, 111, 170, 182, 247, 50, 62, 223, 196, 244, 223, 162, 138, 184, 243, 171,
+            233, 153, 212, 151, 62, 60, 230, 242, 227, 39, 101, 178, 42, 141,
         ];
         ledger_kv = ledger_kv.refresh_ledger().unwrap();
 
         let entry = ledger_kv
             .entries
-            .get(&EntryLabel::Unspecified)
+            .get("Unspecified")
             .unwrap()
             .values()
             .next()
@@ -734,7 +690,7 @@ mod tests {
         assert_eq!(
             entry,
             LedgerEntry {
-                label: EntryLabel::Unspecified,
+                label: "Unspecified".to_string(),
                 key,
                 value,
                 operation: Operation::Upsert,

@@ -4,7 +4,6 @@
 ///
 use ledger_kv::{platform_specific, LedgerKV};
 
-use borsh::{BorshDeserialize, BorshSerialize};
 use clap::{arg, Arg, Command};
 use std::path::PathBuf;
 use std::str::FromStr;
@@ -54,21 +53,6 @@ fn parse_args() -> ParsedArgs {
     }
 }
 
-#[derive(BorshSerialize, BorshDeserialize, Clone, PartialEq, Eq, Debug, Hash)]
-pub enum EntryLabel {
-    Unspecified,
-    NodeProvider,
-}
-
-impl std::fmt::Display for EntryLabel {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            EntryLabel::Unspecified => write!(f, "Unspecified"),
-            EntryLabel::NodeProvider => write!(f, "NodeProvider"),
-        }
-    }
-}
-
 fn logs_init() {
     // Set log level to info by default
     if std::env::var("RUST_LOG").is_err() {
@@ -112,7 +96,7 @@ fn main() -> anyhow::Result<()> {
     if let Some((key, value)) = args.upsert {
         // Upsert (insert/update) an entry in the ledger
         ledger_kv.upsert(
-            EntryLabel::Unspecified,
+            "Unspecified",
             key.as_bytes().to_vec(),
             value.as_bytes().to_vec(),
         )?;
@@ -122,7 +106,7 @@ fn main() -> anyhow::Result<()> {
 
     if let Some(key) = args.delete {
         // Delete an entry from the ledger
-        ledger_kv.delete(EntryLabel::Unspecified, key.as_bytes().to_vec())?;
+        ledger_kv.delete("Unspecified", key.as_bytes().to_vec())?;
         println!("Delete entry with KEY: {}", key);
     }
 

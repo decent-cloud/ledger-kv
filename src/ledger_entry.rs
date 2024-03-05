@@ -14,14 +14,14 @@ pub type Value = Vec<u8>;
 
 /// Struct representing an entry stored for a particular key in the key-value store.
 #[derive(BorshSerialize, BorshDeserialize, Clone, PartialEq, Eq, Debug)]
-pub struct LedgerEntry<TL> {
-    pub label: TL,
+pub struct LedgerEntry {
+    pub label: String,
     pub key: Key,
     pub value: Value,
     pub operation: Operation,
 }
 
-impl<TL> LedgerEntry<TL> {
+impl LedgerEntry {
     /// Creates a new `LedgerEntry` instance.
     ///
     /// # Arguments
@@ -34,9 +34,9 @@ impl<TL> LedgerEntry<TL> {
     /// # Returns
     ///
     /// A new `LedgerEntry` instance.
-    pub fn new(label: TL, key: Key, value: Value, operation: Operation) -> Self {
+    pub fn new<S: AsRef<str>>(label: S, key: Key, value: Value, operation: Operation) -> Self {
         LedgerEntry {
-            label,
+            label: label.as_ref().to_string(),
             key,
             value,
             operation,
@@ -44,11 +44,7 @@ impl<TL> LedgerEntry<TL> {
     }
 }
 
-/// Implements the `Display` trait for `LedgerEntry`.
-impl<TL> std::fmt::Display for LedgerEntry<TL>
-where
-    TL: std::fmt::Display,
-{
+impl std::fmt::Display for LedgerEntry {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         let key = match String::from_utf8(self.key.clone()) {
             Ok(v) => v,
@@ -63,17 +59,17 @@ where
 }
 
 #[derive(BorshSerialize, BorshDeserialize, Clone, PartialEq, Eq, Debug)]
-pub struct LedgerBlock<TL> {
-    pub(crate) entries: Vec<LedgerEntry<TL>>,
+pub struct LedgerBlock {
+    pub(crate) entries: Vec<LedgerEntry>,
     pub(crate) offset: u64,
     pub(crate) offset_next: Option<u64>,
     pub(crate) timestamp: u64,
     pub(crate) hash: Vec<u8>,
 }
 
-impl<TL> LedgerBlock<TL> {
+impl LedgerBlock {
     pub(crate) fn new(
-        entries: Vec<LedgerEntry<TL>>,
+        entries: Vec<LedgerEntry>,
         offset: u64,
         offset_next: Option<u64>,
         timestamp: u64,
@@ -89,11 +85,7 @@ impl<TL> LedgerBlock<TL> {
     }
 }
 
-/// Implements the `Display` trait for `LedgerBlock`.
-impl<TL> std::fmt::Display for LedgerBlock<TL>
-where
-    TL: std::fmt::Display,
-{
+impl std::fmt::Display for LedgerBlock {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         write!(
             f,
