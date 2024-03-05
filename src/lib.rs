@@ -314,6 +314,16 @@ where
         Ok(())
     }
 
+    pub fn get(&self, label: TL, key: &Key) -> anyhow::Result<Value> {
+        match self.entries.get(&label) {
+            Some(entries) => entries
+                .get(key)
+                .ok_or(anyhow::format_err!("Key not found"))
+                .map(|e| e.value.clone()),
+            None => Err(anyhow::format_err!("Entry label {:?} not found", label)),
+        }
+    }
+
     pub fn upsert(&mut self, label: TL, key: Key, value: Value) -> anyhow::Result<()> {
         let entry = LedgerEntry::new(label.clone(), key.clone(), value.clone(), Operation::Upsert);
 
