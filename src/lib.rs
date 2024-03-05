@@ -315,6 +315,12 @@ where
     }
 
     pub fn get(&self, label: TL, key: &Key) -> anyhow::Result<Value> {
+        if let Some(entry) = self.entries_next_block.get(key) {
+            match entry.operation {
+                Operation::Upsert => return Ok(entry.value.clone()),
+                Operation::Delete => return Err(anyhow::format_err!("Key not found")),
+            }
+        }
         match self.entries.get(&label) {
             Some(entries) => entries
                 .get(key)
