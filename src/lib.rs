@@ -79,7 +79,7 @@ pub use platform_specific::{export_debug, export_error, export_info, export_warn
 
 use borsh::{to_vec, BorshDeserialize, BorshSerialize};
 use indexmap::IndexMap;
-pub use ledger_entry::{Key, LedgerBlock, LedgerEntry, Operation, Value};
+pub use ledger_entry::{EntryKey, EntryValue, LedgerBlock, LedgerEntry, Operation};
 use sha2::{Digest, Sha256};
 use std::{cell::RefCell, fmt::Debug};
 
@@ -138,8 +138,8 @@ impl Metadata {
 #[derive(Debug)]
 pub struct LedgerKV {
     metadata: RefCell<Metadata>,
-    entries_next_block: IndexMap<Key, LedgerEntry>,
-    entries: IndexMap<String, IndexMap<Key, LedgerEntry>>,
+    entries_next_block: IndexMap<EntryKey, LedgerEntry>,
+    entries: IndexMap<String, IndexMap<EntryKey, LedgerEntry>>,
     get_timestamp_nanos: fn() -> u64,
 }
 
@@ -287,7 +287,7 @@ impl LedgerKV {
         Ok(())
     }
 
-    pub fn get<S: AsRef<str>>(&self, label: S, key: &Key) -> anyhow::Result<Value> {
+    pub fn get<S: AsRef<str>>(&self, label: S, key: &EntryKey) -> anyhow::Result<EntryValue> {
         if let Some(entry) = self.entries_next_block.get(key) {
             match entry.operation {
                 Operation::Upsert => return Ok(entry.value.clone()),
@@ -309,8 +309,8 @@ impl LedgerKV {
     pub fn upsert<S: AsRef<str>>(
         &mut self,
         label: S,
-        key: Key,
-        value: Value,
+        key: EntryKey,
+        value: EntryValue,
     ) -> anyhow::Result<()> {
         let entry = LedgerEntry::new(
             label.as_ref().to_string(),
@@ -335,7 +335,7 @@ impl LedgerKV {
         Ok(())
     }
 
-    pub fn delete<S: AsRef<str>>(&mut self, label: S, key: Key) -> anyhow::Result<()> {
+    pub fn delete<S: AsRef<str>>(&mut self, label: S, key: EntryKey) -> anyhow::Result<()> {
         let label = label.as_ref().to_string();
         let entry = LedgerEntry::new(label.clone(), key.clone(), Vec::new(), Operation::Delete);
 

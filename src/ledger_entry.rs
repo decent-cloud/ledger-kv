@@ -9,20 +9,25 @@ pub enum Operation {
     Delete,
 }
 
-pub type Key = Vec<u8>;
-pub type Value = Vec<u8>;
+pub type EntryKey = Vec<u8>;
+pub type EntryValue = Vec<u8>;
 
 /// Struct representing an entry stored for a particular key in the key-value store.
 #[derive(BorshSerialize, BorshDeserialize, Clone, PartialEq, Eq, Debug)]
 pub struct LedgerEntry {
     pub label: String,
-    pub key: Key,
-    pub value: Value,
+    pub key: EntryKey,
+    pub value: EntryValue,
     pub operation: Operation,
 }
 
 impl LedgerEntry {
-    pub fn new<S: AsRef<str>>(label: S, key: Key, value: Value, operation: Operation) -> Self {
+    pub fn new<S: AsRef<str>>(
+        label: S,
+        key: EntryKey,
+        value: EntryValue,
+        operation: Operation,
+    ) -> Self {
         LedgerEntry {
             label: label.as_ref().to_string(),
             key,
