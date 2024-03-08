@@ -22,18 +22,6 @@ pub struct LedgerEntry {
 }
 
 impl LedgerEntry {
-    /// Creates a new `LedgerEntry` instance.
-    ///
-    /// # Arguments
-    ///
-    /// * `label` - The label of the entry.
-    /// * `key` - The key of the entry.
-    /// * `value` - The value of the entry.
-    /// * `operation` - The operation to be performed on the entry.
-    ///
-    /// # Returns
-    ///
-    /// A new `LedgerEntry` instance.
     pub fn new<S: AsRef<str>>(label: S, key: Key, value: Value, operation: Operation) -> Self {
         LedgerEntry {
             label: label.as_ref().to_string(),

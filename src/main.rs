@@ -85,11 +85,7 @@ fn main() -> anyhow::Result<()> {
         println!("Listing entries:");
         // Iterate over the entries in the ledger and print them
         for entry in ledger_kv.iter(None) {
-            println!(
-                "Key: {}, Value: {}",
-                String::from_utf8_lossy(&entry.key),
-                String::from_utf8_lossy(&entry.value)
-            );
+            println!("{}", entry);
         }
     }
 
