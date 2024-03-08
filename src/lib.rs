@@ -15,6 +15,10 @@
 //! The LedgerKV struct provides methods for inserting and deleting entries, as well as iterating over the entries
 //! by label or in raw form. It also supports re-reading the in-memory index and metadata from the binary file.
 //!
+//! Entries of LedgerKV are stored in blocks. Each block contains a vector of entries, and the block is committed
+//! to the binary file when the user calls the commit_block method. A block also contains metadata such as the
+//! offset of block in the persistent storage, the timestamp, and the parent hash.
+//!
 //! Example usage:
 //!
 //! ```rust
@@ -138,9 +142,9 @@ impl Metadata {
 #[derive(Debug)]
 pub struct LedgerKV {
     metadata: RefCell<Metadata>,
-    entries_next_block: IndexMap<EntryKey, LedgerEntry>,
     entries: IndexMap<String, IndexMap<EntryKey, LedgerEntry>>,
-    get_timestamp_nanos: fn() -> u64,
+    entries_next_block: IndexMap<EntryKey, LedgerEntry>,
+    current_timestamp_nanos: fn() -> u64,
 }
 
 enum ErrorBlockRead {
@@ -152,9 +156,9 @@ impl LedgerKV {
     pub fn new() -> anyhow::Result<Self> {
         LedgerKV {
             metadata: RefCell::new(Metadata::new()),
-            entries_next_block: IndexMap::new(),
             entries: IndexMap::new(),
-            get_timestamp_nanos: platform_specific::get_timestamp_nanos,
+            entries_next_block: IndexMap::new(),
+            current_timestamp_nanos: platform_specific::get_timestamp_nanos,
         }
         .refresh_ledger()
     }
@@ -162,7 +166,7 @@ impl LedgerKV {
     #[cfg(test)]
     fn with_timestamp_fn(self, get_timestamp_nanos: fn() -> u64) -> Self {
         LedgerKV {
-            get_timestamp_nanos,
+            current_timestamp_nanos: get_timestamp_nanos,
             ..self
         }
     }
@@ -268,7 +272,7 @@ impl LedgerKV {
                 self.entries_next_block.len()
             );
             let block_entries = Vec::from_iter(self.entries_next_block.values().cloned());
-            let block_timestamp = (self.get_timestamp_nanos)();
+            let block_timestamp = (self.current_timestamp_nanos)();
             let hash = Self::_compute_block_chain_hash(
                 self.metadata.borrow().get_last_block_chain_hash(),
                 &block_entries,
