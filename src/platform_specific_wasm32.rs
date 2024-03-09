@@ -1,3 +1,7 @@
+/// This module contains functionalities specific to the WebAssembly (WASM) 32-bit platform.
+/// It provides implementations and abstractions that are unique to this environment,
+/// enabling LedgerKV to run on the Internet Computer Platform, which uses wasm32 for canisters.
+///
 pub use crate::{debug, error, info, warn}; // created in the crate root by macro_export
 pub use ic_canister_log::log;
 use ic_canister_log::{declare_log_buffer, export, LogEntry};

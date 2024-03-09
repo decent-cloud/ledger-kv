@@ -377,3 +377,21 @@ pub fn get_partition_table() -> PartitionTable {
 pub fn persist() {
     PARTITIONS.persist().unwrap();
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_calc_needed_pages() {
+        assert_eq!(calc_needed_pages(0, 1000), 1);
+        assert_eq!(calc_needed_pages(500, 1000), 1);
+        assert_eq!(calc_needed_pages(1000, 1000), 0);
+    }
+
+    #[test]
+    fn test_partition_table_header_default() {
+        let header = PartitionTableHeader::default();
+        assert_eq!(header.magic_bytes, EXPECTED_MAGIC_BYTES);
+    }
+}

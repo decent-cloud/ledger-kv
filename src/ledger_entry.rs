@@ -94,3 +94,26 @@ impl std::fmt::Display for LedgerBlock {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_ledger_entry_new() {
+        let key = vec![1, 2, 3];
+        let value = vec![4, 5, 6];
+        let entry = LedgerEntry::new("test_label", key.clone(), value.clone(), Operation::Upsert);
+
+        assert_eq!(entry.label, "test_label");
+        assert_eq!(entry.key, key);
+        assert_eq!(entry.value, value);
+        assert_eq!(entry.operation, Operation::Upsert);
+    }
+
+    #[test]
+    fn test_operation_enum() {
+        assert_eq!(Operation::Upsert as u8, 0);
+        assert_eq!(Operation::Delete as u8, 1);
+    }
+}
