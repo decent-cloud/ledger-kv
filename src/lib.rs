@@ -143,7 +143,7 @@ impl Metadata {
 pub struct LedgerKV {
     metadata: RefCell<Metadata>,
     entries: IndexMap<String, IndexMap<EntryKey, LedgerEntry>>,
-    entries_next_block: IndexMap<EntryKey, LedgerEntry>,
+    next_block_entries: IndexMap<String, IndexMap<EntryKey, LedgerEntry>>,
     current_timestamp_nanos: fn() -> u64,
 }
 
@@ -157,7 +157,7 @@ impl LedgerKV {
         LedgerKV {
             metadata: RefCell::new(Metadata::new()),
             entries: IndexMap::new(),
-            entries_next_block: IndexMap::new(),
+            next_block_entries: IndexMap::new(),
             current_timestamp_nanos: platform_specific::get_timestamp_nanos,
         }
         .refresh_ledger()
@@ -255,23 +255,32 @@ impl LedgerKV {
     }
 
     pub fn begin_block(&mut self) -> anyhow::Result<()> {
-        if !&self.entries_next_block.is_empty() {
+        if !&self.next_block_entries.is_empty() {
             return Err(anyhow::format_err!("There is already an open transaction."));
         } else {
-            self.entries_next_block.clear();
+            self.next_block_entries.clear();
         }
         Ok(())
     }
 
     pub fn commit_block(&mut self) -> anyhow::Result<()> {
-        if self.entries_next_block.is_empty() {
+        if self.next_block_entries.is_empty() {
             debug!("Commit of empty block invoked, skipping");
         } else {
             info!(
                 "Commit non-empty block, with {} entries",
-                self.entries_next_block.len()
+                self.next_block_entries.len()
             );
-            let block_entries = Vec::from_iter(self.entries_next_block.values().cloned());
+            let mut block_entries = Vec::new();
+            for (label, values) in self.next_block_entries.iter() {
+                self.entries
+                    .entry(label.clone())
+                    .or_default()
+                    .extend(values.clone());
+                for (_key, entry) in values.iter() {
+                    block_entries.push(entry.clone());
+                }
+            }
             let block_timestamp = (self.current_timestamp_nanos)();
             let hash = Self::_compute_block_chain_hash(
                 self.metadata.borrow().get_last_block_chain_hash(),
@@ -286,28 +295,60 @@ impl LedgerKV {
                 hash,
             );
             self._journal_append_block(block)?;
-            self.entries_next_block.clear();
+            self.next_block_entries.clear();
         }
         Ok(())
     }
 
     pub fn get<S: AsRef<str>>(&self, label: S, key: &EntryKey) -> anyhow::Result<EntryValue> {
-        if let Some(entry) = self.entries_next_block.get(key) {
-            match entry.operation {
-                Operation::Upsert => return Ok(entry.value.clone()),
-                Operation::Delete => return Err(anyhow::format_err!("Key not found")),
+        fn lookup<'a>(
+            map: &'a IndexMap<String, IndexMap<EntryKey, LedgerEntry>>,
+            label: &String,
+            key: &EntryKey,
+        ) -> Option<&'a LedgerEntry> {
+            match map.get(label) {
+                Some(entries) => entries.get(key),
+                None => None,
             }
         }
-        match self.entries.get(label.as_ref()) {
-            Some(entries) => entries
-                .get(key)
-                .ok_or(anyhow::format_err!("Key not found"))
-                .map(|e| e.value.clone()),
-            None => Err(anyhow::format_err!(
-                "Entry label {:?} not found",
-                label.as_ref()
-            )),
+
+        let label = label.as_ref().to_string();
+        for map in [&self.next_block_entries, &self.entries] {
+            if let Some(entry) = lookup(map, &label, key) {
+                match entry.operation {
+                    Operation::Upsert => {
+                        return Ok(entry.value.clone());
+                    }
+                    Operation::Delete => {
+                        return Err(anyhow::format_err!("Entry not found"));
+                    }
+                }
+            }
         }
+
+        Err(anyhow::format_err!("Entry not found"))
+    }
+
+    fn _insert_entry_into_next_block(
+        &mut self,
+        label: String,
+        key: EntryKey,
+        value: EntryValue,
+        operation: Operation,
+    ) -> anyhow::Result<()> {
+        let entry = LedgerEntry::new(label.clone(), key, value, operation);
+        match self.next_block_entries.get_mut(&entry.label) {
+            Some(entries) => {
+                entries.insert(entry.key.clone(), entry);
+            }
+            None => {
+                let mut new_map = IndexMap::new();
+                new_map.insert(entry.key.clone(), entry);
+                self.next_block_entries.insert(label, new_map);
+            }
+        };
+
+        Ok(())
     }
 
     pub fn upsert<S: AsRef<str>>(
@@ -316,50 +357,27 @@ impl LedgerKV {
         key: EntryKey,
         value: EntryValue,
     ) -> anyhow::Result<()> {
-        let entry = LedgerEntry::new(
+        self._insert_entry_into_next_block(
             label.as_ref().to_string(),
-            key.clone(),
-            value.clone(),
+            key,
+            value,
             Operation::Upsert,
-        );
-
-        self.entries_next_block.insert(key.clone(), entry.clone());
-
-        match self.entries.get_mut(label.as_ref()) {
-            Some(entries) => {
-                entries.insert(key, entry);
-            }
-            None => {
-                let mut new_map = IndexMap::new();
-                new_map.insert(key, entry);
-                self.entries.insert(label.as_ref().to_string(), new_map);
-            }
-        };
-
-        Ok(())
+        )
     }
 
     pub fn delete<S: AsRef<str>>(&mut self, label: S, key: EntryKey) -> anyhow::Result<()> {
-        let label = label.as_ref().to_string();
-        let entry = LedgerEntry::new(label.clone(), key.clone(), Vec::new(), Operation::Delete);
-
-        self.entries_next_block.insert(key.clone(), entry);
-
-        match self.entries.get_mut(&label) {
-            Some(entries) => {
-                entries.swap_remove(&key);
-            }
-            None => {
-                warn!("Entry label {:?} not found", label);
-            }
-        };
-
-        Ok(())
+        self._insert_entry_into_next_block(
+            label.as_ref().to_string(),
+            key,
+            Vec::new(),
+            Operation::Delete,
+        )
     }
 
     pub fn refresh_ledger(mut self) -> anyhow::Result<LedgerKV> {
         self.metadata.borrow_mut().clear();
         self.entries.clear();
+        self.next_block_entries.clear();
 
         // If the backend is empty or non-existing, just return
         if persistent_storage_size_bytes() == 0 {
@@ -379,7 +397,6 @@ impl LedgerKV {
         for ledger_block in self.iter_raw() {
             let ledger_block = ledger_block?;
 
-            // Update the in-memory IndexMap of entries, used for quick lookups
             let expected_hash = Self::_compute_block_chain_hash(
                 &parent_hash,
                 &ledger_block.entries,
@@ -436,16 +453,24 @@ impl LedgerKV {
     }
 
     pub fn iter(&self, label: Option<&str>) -> impl Iterator<Item = &LedgerEntry> {
-        self.entries
-            .iter()
-            .filter(|(entry_label, _entry)| match &label {
-                Some(label) => entry_label == &label,
-                None => true,
-            })
-            .map(|(_, entry)| entry)
-            .flat_map(|entry| entry.values())
-            .collect::<Vec<_>>()
-            .into_iter()
+        match label {
+            Some(label) => self
+                .entries
+                .get(label)
+                .map(|entries| entries.values())
+                .unwrap_or_default()
+                .filter(|entry| entry.operation == Operation::Upsert)
+                .collect::<Vec<_>>()
+                .into_iter(),
+            None => self
+                .entries
+                .values()
+                .into_iter()
+                .flat_map(|entries| entries.values())
+                .filter(|entry| entry.operation == Operation::Upsert)
+                .collect::<Vec<_>>()
+                .into_iter(),
+        }
     }
 
     pub fn iter_raw(&self) -> impl Iterator<Item = anyhow::Result<LedgerBlock>> + '_ {
@@ -551,13 +576,15 @@ mod tests {
         let mut ledger_kv = new_temp_ledger();
 
         // Test upsert
-        let key = vec![1, 2, 3];
-        let value = vec![4, 5, 6];
+        let key = b"test_key".to_vec();
+        let value = b"test_value".to_vec();
         ledger_kv
             .upsert("Unspecified", key.clone(), value.clone())
             .unwrap();
         println!("partition table {}", partition_table::get_partition_table());
+        assert_eq!(ledger_kv.get("Unspecified", &key).unwrap(), value);
         assert!(ledger_kv.commit_block().is_ok());
+        assert_eq!(ledger_kv.get("Unspecified", &key).unwrap(), value);
         let entries = ledger_kv.entries.get("Unspecified").unwrap();
         assert_eq!(
             entries.get(&key),
@@ -569,18 +596,21 @@ mod tests {
             ))
         );
         assert_eq!(ledger_kv.metadata.borrow().num_blocks, 1);
-        assert!(ledger_kv.entries_next_block.is_empty());
+        assert!(ledger_kv.next_block_entries.is_empty());
     }
 
     #[test]
     fn test_upsert_with_matching_entry_label() {
         let mut ledger_kv = new_temp_ledger();
 
-        let key = vec![1, 2, 3];
-        let value = vec![4, 5, 6];
+        let key = b"test_key".to_vec();
+        let value = b"test_value".to_vec();
         ledger_kv
             .upsert("NodeProvider", key.clone(), value.clone())
             .unwrap();
+        assert_eq!(ledger_kv.entries.get("NodeProvider"), None); // value not committed yet
+        assert_eq!(ledger_kv.get("NodeProvider", &key).unwrap(), value);
+        ledger_kv.commit_block().unwrap();
         let entries = ledger_kv.entries.get("NodeProvider").unwrap();
         assert_eq!(
             entries.get(&key),
@@ -597,8 +627,8 @@ mod tests {
     fn test_upsert_with_mismatched_entry_type() {
         let mut ledger_kv = new_temp_ledger();
 
-        let key = vec![1, 2, 3];
-        let value = vec![4, 5, 6];
+        let key = b"test_key".to_vec();
+        let value = b"test_value".to_vec();
         ledger_kv
             .upsert("Unspecified", key.clone(), value.clone())
             .unwrap();
@@ -611,27 +641,61 @@ mod tests {
     fn test_delete_with_matching_entry_type() {
         let mut ledger_kv = new_temp_ledger();
 
-        let key = vec![1, 2, 3];
-        let value = vec![4, 5, 6];
+        let key = b"test_key".to_vec();
+        let value = b"test_value".to_vec();
         ledger_kv
             .upsert("NodeProvider", key.clone(), value.clone())
             .unwrap();
+        assert_eq!(ledger_kv.get("NodeProvider", &key).unwrap(), value); // Before delete: the value is there
         ledger_kv.delete("NodeProvider", key.clone()).unwrap();
+        let expected_tombstone = Some(LedgerEntry {
+            label: "NodeProvider".to_string(),
+            key: key.clone(),
+            value: vec![],
+            operation: Operation::Delete,
+        });
+        assert_eq!(
+            ledger_kv.get("NodeProvider", &key).unwrap_err().to_string(),
+            "Entry not found"
+        ); // After delete: the value is gone in the public interface
+        assert_eq!(
+            ledger_kv
+                .next_block_entries
+                .get("NodeProvider")
+                .unwrap()
+                .get(&key),
+            expected_tombstone.as_ref()
+        );
+        assert_eq!(ledger_kv.entries.get("NodeProvider"), None); // (not yet committed)
 
-        // Ensure that the entry is deleted from the ledger since the entry_type matches
-        let entries = ledger_kv.entries.get("NodeProvider").unwrap();
-        assert_eq!(entries.get(&key), None);
+        // Now commit the block
+        assert!(ledger_kv.commit_block().is_ok());
+
+        // And recheck: the value is gone in the public interface and deletion is in the ledger
+        assert_eq!(
+            ledger_kv.entries.get("NodeProvider").unwrap().get(&key),
+            expected_tombstone.as_ref()
+        );
+        assert_eq!(ledger_kv.next_block_entries.get("NodeProvider"), None);
+        assert_eq!(
+            ledger_kv.get("NodeProvider", &key).unwrap_err().to_string(),
+            "Entry not found"
+        );
     }
 
     #[test]
     fn test_delete_with_mismatched_entry_type() {
         let mut ledger_kv = new_temp_ledger();
 
-        let key = vec![1, 2, 3];
-        let value = vec![4, 5, 6];
+        let key = b"test_key".to_vec();
+        let value = b"test_value".to_vec();
         ledger_kv
             .upsert("NodeProvider", key.clone(), value.clone())
             .unwrap();
+        ledger_kv.get("NodeProvider", &key).unwrap();
+        assert!(ledger_kv.entries.get("NodeProvider").is_none()); // the value is not yet committed
+        ledger_kv.commit_block().unwrap();
+        ledger_kv.entries.get("NodeProvider").unwrap();
         ledger_kv.delete("Unspecified", key.clone()).unwrap();
 
         // Ensure that the entry is not deleted from the ledger since the entry_type doesn't match
@@ -653,14 +717,29 @@ mod tests {
         let mut ledger_kv = new_temp_ledger();
 
         // Test delete
-        let key = vec![1, 2, 3];
-        let value = vec![4, 5, 6];
+        let key = b"test_key".to_vec();
+        let value = b"test_value".to_vec();
         ledger_kv
             .upsert("Unspecified", key.clone(), value.clone())
             .unwrap();
         ledger_kv.delete("Unspecified", key.clone()).unwrap();
+        assert!(ledger_kv.commit_block().is_ok());
         let entries = ledger_kv.entries.get("Unspecified").unwrap();
-        assert_eq!(entries.get(&key), None);
+        assert_eq!(
+            entries.get(&key),
+            Some(LedgerEntry {
+                label: "Unspecified".to_string(),
+                key: key.clone(),
+                value: vec![],
+                operation: Operation::Delete
+            })
+            .as_ref()
+        );
+        assert_eq!(ledger_kv.entries.get("NodeProvider"), None);
+        assert_eq!(
+            ledger_kv.get("Unspecified", &key).unwrap_err().to_string(),
+            "Entry not found"
+        );
     }
 
     #[test]
