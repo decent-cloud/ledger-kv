@@ -312,11 +312,11 @@ impl LedgerKV {
         Ok(())
     }
 
-    pub fn get<S: AsRef<str>>(&self, label: S, key: &EntryKey) -> anyhow::Result<EntryValue> {
+    pub fn get<S: AsRef<str>>(&self, label: S, key: &[u8]) -> anyhow::Result<EntryValue> {
         fn lookup<'a>(
             map: &'a IndexMap<String, IndexMap<EntryKey, LedgerEntry>>,
             label: &String,
-            key: &EntryKey,
+            key: &[u8],
         ) -> Option<&'a LedgerEntry> {
             match map.get(label) {
                 Some(entries) => entries.get(key),
