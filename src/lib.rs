@@ -132,12 +132,11 @@ impl Metadata {
         parent_hash: &[u8],
         block_timestamp_ns: u64,
         next_block_write_position: u64,
-    ) -> anyhow::Result<()> {
+    ) {
         self.num_blocks += 1;
         self.last_block_chain_hash = parent_hash.to_vec();
         self.last_block_timestamp_ns = block_timestamp_ns;
         self.next_block_write_position = next_block_write_position;
-        Ok(())
     }
 
     fn get_last_block_chain_hash(&self) -> &[u8] {
@@ -155,11 +154,6 @@ pub struct LedgerKV {
     entries: IndexMap<String, IndexMap<EntryKey, LedgerEntry>>,
     next_block_entries: IndexMap<String, IndexMap<EntryKey, LedgerEntry>>,
     current_timestamp_nanos: fn() -> u64,
-}
-
-enum ErrorBlockRead {
-    Empty,
-    Corrupted(anyhow::Error),
 }
 
 impl LedgerKV {
@@ -228,19 +222,21 @@ impl LedgerKV {
             &ledger_block.hash,
             ledger_block.timestamp,
             next_write_position,
-        )
+        );
+        Ok(())
     }
 
-    fn _journal_read_block(&self, offset: u64) -> Result<LedgerBlock, ErrorBlockRead> {
+    fn _journal_read_block(&self, offset: u64) -> Result<LedgerBlock, LedgerError> {
         // Find out how many bytes we need to read ==> block len in bytes
         let mut buf = [0u8; std::mem::size_of::<u32>()];
-        persistent_storage_read64(offset, &mut buf).map_err(ErrorBlockRead::Corrupted)?;
+        persistent_storage_read64(offset, &mut buf)
+            .map_err(|e| LedgerError::BlockCorrupted(e.to_string()))?;
         let block_len: u32 = u32::from_le_bytes(buf);
         debug!("read bytes: {:?}", buf);
         debug!("block_len: {}", block_len);
 
         if block_len == 0 {
-            return Err(ErrorBlockRead::Empty);
+            return Err(LedgerError::BlockEmpty);
         }
 
         debug!(
@@ -250,10 +246,9 @@ impl LedgerKV {
 
         // Read the block as raw bytes
         let mut buf = vec![0u8; block_len as usize];
-        persistent_storage_read64(offset + std::mem::size_of::<u32>() as u64, &mut buf)
-            .map_err(ErrorBlockRead::Corrupted)?;
+        persistent_storage_read64(offset + std::mem::size_of::<u32>() as u64, &mut buf)?;
         match LedgerBlock::deserialize(&mut buf.as_ref())
-            .map_err(|err| ErrorBlockRead::Corrupted(err.into()))
+            .map_err(|err| LedgerError::BlockCorrupted(err.to_string()))
         {
             Ok(mut block) => {
                 block.offset_next =
@@ -310,7 +305,7 @@ impl LedgerKV {
         Ok(())
     }
 
-    pub fn get<S: AsRef<str>>(&self, label: S, key: &[u8]) -> anyhow::Result<EntryValue> {
+    pub fn get<S: AsRef<str>>(&self, label: S, key: &[u8]) -> Result<EntryValue, LedgerError> {
         fn lookup<'a>(
             map: &'a IndexMap<String, IndexMap<EntryKey, LedgerEntry>>,
             label: &String,
@@ -330,13 +325,13 @@ impl LedgerKV {
                         return Ok(entry.value.clone());
                     }
                     Operation::Delete => {
-                        return Err(anyhow::format_err!("Entry not found"));
+                        return Err(LedgerError::EntryNotFound);
                     }
                 }
             }
         }
 
-        Err(anyhow::format_err!("Entry not found"))
+        Err(LedgerError::EntryNotFound)
     }
 
     fn _insert_entry_into_next_block<S: AsRef<str>, K: AsRef<[u8]>, V: AsRef<[u8]>>(
@@ -422,7 +417,7 @@ impl LedgerKV {
                 parent_hash.as_slice(),
                 ledger_block.timestamp,
                 ledger_block.offset_next.expect("offset must be set"),
-            )?;
+            );
 
             updates.push(ledger_block);
         }
@@ -503,8 +498,14 @@ impl LedgerKV {
         (0..).scan(data_start, |state, _| {
             let ledger_block = match self._journal_read_block(*state) {
                 Ok(block) => block,
-                Err(ErrorBlockRead::Empty) => return None,
-                Err(ErrorBlockRead::Corrupted(err)) => {
+                Err(LedgerError::BlockEmpty) => return None,
+                Err(LedgerError::BlockCorrupted(err)) => {
+                    return Some(Err(anyhow::format_err!(
+                        "Failed to read Ledger block: {}",
+                        err
+                    )))
+                }
+                Err(err) => {
                     return Some(Err(anyhow::format_err!(
                         "Failed to read Ledger block: {}",
                         err
@@ -530,6 +531,37 @@ impl LedgerKV {
 
     pub fn get_next_block_write_position(&self) -> u64 {
         self.metadata.borrow().next_block_write_position
+    }
+}
+
+#[derive(Debug, PartialEq)]
+pub enum LedgerError {
+    EntryNotFound,
+    BlockEmpty,
+    BlockCorrupted(String),
+    Other(String),
+}
+
+impl From<std::io::Error> for LedgerError {
+    fn from(err: std::io::Error) -> Self {
+        LedgerError::BlockCorrupted(err.to_string())
+    }
+}
+
+impl From<anyhow::Error> for LedgerError {
+    fn from(err: anyhow::Error) -> Self {
+        LedgerError::Other(err.to_string())
+    }
+}
+
+impl std::fmt::Display for LedgerError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            LedgerError::EntryNotFound => write!(f, "Entry not found"),
+            LedgerError::BlockEmpty => write!(f, "Block is empty"),
+            LedgerError::BlockCorrupted(err) => write!(f, "Block corrupted: {}", err),
+            LedgerError::Other(err) => write!(f, "Other error: {}", err),
+        }
     }
 }
 
@@ -684,8 +716,8 @@ mod tests {
             operation: Operation::Delete,
         });
         assert_eq!(
-            ledger_kv.get("NodeProvider", &key).unwrap_err().to_string(),
-            "Entry not found"
+            ledger_kv.get("NodeProvider", &key).unwrap_err(),
+            LedgerError::EntryNotFound
         ); // After delete: the value is gone in the public interface
         assert_eq!(
             ledger_kv
@@ -707,8 +739,8 @@ mod tests {
         );
         assert_eq!(ledger_kv.next_block_entries.get("NodeProvider"), None);
         assert_eq!(
-            ledger_kv.get("NodeProvider", &key).unwrap_err().to_string(),
-            "Entry not found"
+            ledger_kv.get("NodeProvider", &key).unwrap_err(),
+            LedgerError::EntryNotFound
         );
     }
 
@@ -766,8 +798,8 @@ mod tests {
         );
         assert_eq!(ledger_kv.entries.get("NodeProvider"), None);
         assert_eq!(
-            ledger_kv.get("Unspecified", &key).unwrap_err().to_string(),
-            "Entry not found"
+            ledger_kv.get("Unspecified", &key).unwrap_err(),
+            LedgerError::EntryNotFound
         );
     }
 
