@@ -339,14 +339,14 @@ impl LedgerKV {
         Err(anyhow::format_err!("Entry not found"))
     }
 
-    fn _insert_entry_into_next_block(
+    fn _insert_entry_into_next_block<S: AsRef<str>, K: AsRef<[u8]>, V: AsRef<[u8]>>(
         &mut self,
-        label: String,
-        key: EntryKey,
-        value: EntryValue,
+        label: S,
+        key: K,
+        value: V,
         operation: Operation,
     ) -> anyhow::Result<()> {
-        let entry = LedgerEntry::new(label.clone(), key, value, operation);
+        let entry = LedgerEntry::new(label.as_ref(), key, value, operation);
         match self.next_block_entries.get_mut(&entry.label) {
             Some(entries) => {
                 entries.insert(entry.key.clone(), entry);
@@ -354,34 +354,29 @@ impl LedgerKV {
             None => {
                 let mut new_map = IndexMap::new();
                 new_map.insert(entry.key.clone(), entry);
-                self.next_block_entries.insert(label, new_map);
+                self.next_block_entries
+                    .insert(label.as_ref().to_string(), new_map);
             }
         };
 
         Ok(())
     }
 
-    pub fn upsert<S: AsRef<str>>(
+    pub fn upsert<S: AsRef<str>, K: AsRef<[u8]>, V: AsRef<[u8]>>(
         &mut self,
         label: S,
-        key: EntryKey,
-        value: EntryValue,
+        key: K,
+        value: V,
     ) -> anyhow::Result<()> {
-        self._insert_entry_into_next_block(
-            label.as_ref().to_string(),
-            key,
-            value,
-            Operation::Upsert,
-        )
+        self._insert_entry_into_next_block(label, key, value, Operation::Upsert)
     }
 
-    pub fn delete<S: AsRef<str>>(&mut self, label: S, key: EntryKey) -> anyhow::Result<()> {
-        self._insert_entry_into_next_block(
-            label.as_ref().to_string(),
-            key,
-            Vec::new(),
-            Operation::Delete,
-        )
+    pub fn delete<S: AsRef<str>, K: AsRef<[u8]>>(
+        &mut self,
+        label: S,
+        key: K,
+    ) -> anyhow::Result<()> {
+        self._insert_entry_into_next_block(label, key, Vec::new(), Operation::Delete)
     }
 
     pub fn refresh_ledger(mut self) -> anyhow::Result<LedgerKV> {

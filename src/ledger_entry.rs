@@ -22,16 +22,16 @@ pub struct LedgerEntry {
 }
 
 impl LedgerEntry {
-    pub fn new<S: AsRef<str>>(
+    pub fn new<S: AsRef<str>, K: AsRef<[u8]>, V: AsRef<[u8]>>(
         label: S,
-        key: EntryKey,
-        value: EntryValue,
+        key: K,
+        value: V,
         operation: Operation,
     ) -> Self {
         LedgerEntry {
             label: label.as_ref().to_string(),
-            key,
-            value,
+            key: key.as_ref().to_vec(),
+            value: value.as_ref().to_vec(),
             operation,
         }
     }
@@ -103,7 +103,7 @@ mod tests {
     fn test_ledger_entry_new() {
         let key = vec![1, 2, 3];
         let value = vec![4, 5, 6];
-        let entry = LedgerEntry::new("test_label", key.clone(), value.clone(), Operation::Upsert);
+        let entry = LedgerEntry::new("test_label", &key, value.clone(), Operation::Upsert);
 
         assert_eq!(entry.label, "test_label");
         assert_eq!(entry.key, key);
