@@ -213,12 +213,11 @@ impl LedgerKV {
             block_len_bytes, serialized_data_len, serialized_data
         );
         persistent_storage_write64(
-            self.metadata.borrow().next_block_write_position as u64,
+            self.metadata.borrow().next_block_write_position,
             &serialized_data_len,
         );
         persistent_storage_write64(
-            self.metadata.borrow().next_block_write_position as u64
-                + serialized_data_len.len() as u64,
+            self.metadata.borrow().next_block_write_position + serialized_data_len.len() as u64,
             &serialized_data,
         );
 
@@ -235,8 +234,7 @@ impl LedgerKV {
     fn _journal_read_block(&self, offset: u64) -> Result<LedgerBlock, ErrorBlockRead> {
         // Find out how many bytes we need to read ==> block len in bytes
         let mut buf = [0u8; std::mem::size_of::<u32>()];
-        persistent_storage_read64(offset, &mut buf)
-            .map_err(|err| ErrorBlockRead::Corrupted(err))?;
+        persistent_storage_read64(offset, &mut buf).map_err(ErrorBlockRead::Corrupted)?;
         let block_len: u32 = u32::from_le_bytes(buf);
         debug!("read bytes: {:?}", buf);
         debug!("block_len: {}", block_len);
@@ -253,7 +251,7 @@ impl LedgerKV {
         // Read the block as raw bytes
         let mut buf = vec![0u8; block_len as usize];
         persistent_storage_read64(offset + std::mem::size_of::<u32>() as u64, &mut buf)
-            .map_err(|err| ErrorBlockRead::Corrupted(err))?;
+            .map_err(ErrorBlockRead::Corrupted)?;
         match LedgerBlock::deserialize(&mut buf.as_ref())
             .map_err(|err| ErrorBlockRead::Corrupted(err.into()))
         {
@@ -478,7 +476,6 @@ impl LedgerKV {
             None => self
                 .next_block_entries
                 .values()
-                .into_iter()
                 .flat_map(|entries| entries.values())
                 .filter(|entry| entry.operation == Operation::Upsert)
                 .collect::<Vec<_>>()
@@ -499,7 +496,6 @@ impl LedgerKV {
             None => self
                 .entries
                 .values()
-                .into_iter()
                 .flat_map(|entries| entries.values())
                 .filter(|entry| entry.operation == Operation::Upsert)
                 .collect::<Vec<_>>()
