@@ -94,6 +94,8 @@ pub(crate) struct Metadata {
     pub(crate) num_blocks: usize,
     /// The chain hash of the entire ledger, to be used as the initial hash of the next block.
     pub(crate) last_block_chain_hash: Vec<u8>,
+    /// The timestamp of the last block
+    pub(crate) last_block_timestamp_ns: u64,
     /// The offset in the persistent storage where the next block will be written.
     pub(crate) next_block_write_position: u64,
 }
@@ -107,6 +109,7 @@ impl Default for Metadata {
         Metadata {
             num_blocks: 0,
             last_block_chain_hash: Vec::new(),
+            last_block_timestamp_ns: 0,
             next_block_write_position: partition_table::get_data_partition().start_lba,
         }
     }
@@ -120,22 +123,29 @@ impl Metadata {
     pub fn clear(&mut self) {
         self.num_blocks = 0;
         self.last_block_chain_hash = Vec::new();
+        self.last_block_timestamp_ns = 0;
         self.next_block_write_position = partition_table::get_data_partition().start_lba;
     }
 
     pub fn append_block(
         &mut self,
         parent_hash: &[u8],
+        block_timestamp_ns: u64,
         next_block_write_position: u64,
     ) -> anyhow::Result<()> {
         self.num_blocks += 1;
         self.last_block_chain_hash = parent_hash.to_vec();
+        self.last_block_timestamp_ns = block_timestamp_ns;
         self.next_block_write_position = next_block_write_position;
         Ok(())
     }
 
     fn get_last_block_chain_hash(&self) -> &[u8] {
         self.last_block_chain_hash.as_slice()
+    }
+
+    fn get_last_block_timestamp_ns(&self) -> u64 {
+        self.last_block_timestamp_ns
     }
 }
 
@@ -215,9 +225,11 @@ impl LedgerKV {
         let next_write_position = self.metadata.borrow().next_block_write_position
             + serialized_data_len.len() as u64
             + serialized_data.len() as u64;
-        self.metadata
-            .borrow_mut()
-            .append_block(&ledger_block.hash, next_write_position)
+        self.metadata.borrow_mut().append_block(
+            &ledger_block.hash,
+            ledger_block.timestamp,
+            next_write_position,
+        )
     }
 
     fn _journal_read_block(&self, offset: u64) -> Result<LedgerBlock, ErrorBlockRead> {
@@ -415,6 +427,7 @@ impl LedgerKV {
 
             self.metadata.borrow_mut().append_block(
                 parent_hash.as_slice(),
+                ledger_block.timestamp,
                 ledger_block.offset_next.expect("offset must be set"),
             )?;
 
@@ -450,6 +463,27 @@ impl LedgerKV {
         }
 
         Ok(self)
+    }
+
+    pub fn next_block_iter(&self, label: Option<&str>) -> impl Iterator<Item = &LedgerEntry> {
+        match label {
+            Some(label) => self
+                .next_block_entries
+                .get(label)
+                .map(|entries| entries.values())
+                .unwrap_or_default()
+                .filter(|entry| entry.operation == Operation::Upsert)
+                .collect::<Vec<_>>()
+                .into_iter(),
+            None => self
+                .next_block_entries
+                .values()
+                .into_iter()
+                .flat_map(|entries| entries.values())
+                .filter(|entry| entry.operation == Operation::Upsert)
+                .collect::<Vec<_>>()
+                .into_iter(),
+        }
     }
 
     pub fn iter(&self, label: Option<&str>) -> impl Iterator<Item = &LedgerEntry> {
@@ -497,6 +531,10 @@ impl LedgerKV {
 
     pub fn get_latest_block_hash(&self) -> Vec<u8> {
         self.metadata.borrow().get_last_block_chain_hash().to_vec()
+    }
+
+    pub fn get_latest_block_timestamp_ns(&self) -> u64 {
+        self.metadata.borrow().get_last_block_timestamp_ns()
     }
 
     pub fn get_next_block_write_position(&self) -> u64 {
