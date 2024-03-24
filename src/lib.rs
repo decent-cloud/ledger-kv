@@ -22,13 +22,12 @@
 //! Example usage:
 //!
 //! ```rust
-//! use std::path::PathBuf;
-//! use ledger_kv::{platform_specific, LedgerKV, Operation};
-//! use borsh::{BorshDeserialize, BorshSerialize};
+//! use ledger_kv::LedgerKV;
 //!
 //! // Optional: Override the backing file path
+//! // use std::path::PathBuf;
 //! // let ledger_path = PathBuf::from("/tmp/ledger_kv/test_data.bin");
-//! // platform_specific::override_backing_file(Some(ledger_path));
+//! // ledger_kv::platform_specific::override_backing_file(Some(ledger_path));
 //!
 //! // Create a new LedgerKV instance
 //! let mut ledger_kv = LedgerKV::new().expect("Failed to create LedgerKV");
