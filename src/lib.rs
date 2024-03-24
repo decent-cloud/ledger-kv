@@ -604,7 +604,7 @@ mod tests {
         let value = vec![8, 9, 10, 11];
         let ledger_block = LedgerBlock::new(
             vec![LedgerEntry::new(
-                "Unspecified",
+                "Label2",
                 key.clone(),
                 value.clone(),
                 Operation::Upsert,
@@ -626,8 +626,8 @@ mod tests {
         assert_eq!(
             cumulative_hash,
             vec![
-                40, 95, 206, 211, 182, 177, 181, 223, 8, 222, 58, 156, 47, 202, 110, 34, 8, 27, 73,
-                51, 159, 2, 114, 103, 222, 45, 6, 14, 7, 186, 115, 42
+                128, 130, 83, 83, 216, 223, 105, 43, 136, 131, 247, 19, 6, 9, 108, 116, 177, 33,
+                36, 151, 131, 221, 174, 99, 233, 152, 122, 219, 116, 223, 163, 78
             ]
         );
     }
@@ -640,21 +640,16 @@ mod tests {
         let key = b"test_key".to_vec();
         let value = b"test_value".to_vec();
         ledger_kv
-            .upsert("Unspecified", key.clone(), value.clone())
+            .upsert("Label2", key.clone(), value.clone())
             .unwrap();
         println!("partition table {}", partition_table::get_partition_table());
-        assert_eq!(ledger_kv.get("Unspecified", &key).unwrap(), value);
+        assert_eq!(ledger_kv.get("Label2", &key).unwrap(), value);
         assert!(ledger_kv.commit_block().is_ok());
-        assert_eq!(ledger_kv.get("Unspecified", &key).unwrap(), value);
-        let entries = ledger_kv.entries.get("Unspecified").unwrap();
+        assert_eq!(ledger_kv.get("Label2", &key).unwrap(), value);
+        let entries = ledger_kv.entries.get("Label2").unwrap();
         assert_eq!(
             entries.get(&key),
-            Some(&LedgerEntry::new(
-                "Unspecified",
-                key,
-                value,
-                Operation::Upsert,
-            ))
+            Some(&LedgerEntry::new("Label2", key, value, Operation::Upsert,))
         );
         assert_eq!(ledger_kv.metadata.borrow().num_blocks, 1);
         assert!(ledger_kv.next_block_entries.is_empty());
@@ -667,16 +662,16 @@ mod tests {
         let key = b"test_key".to_vec();
         let value = b"test_value".to_vec();
         ledger_kv
-            .upsert("NodeProvider", key.clone(), value.clone())
+            .upsert("Label1", key.clone(), value.clone())
             .unwrap();
-        assert_eq!(ledger_kv.entries.get("NodeProvider"), None); // value not committed yet
-        assert_eq!(ledger_kv.get("NodeProvider", &key).unwrap(), value);
+        assert_eq!(ledger_kv.entries.get("Label1"), None); // value not committed yet
+        assert_eq!(ledger_kv.get("Label1", &key).unwrap(), value);
         ledger_kv.commit_block().unwrap();
-        let entries = ledger_kv.entries.get("NodeProvider").unwrap();
+        let entries = ledger_kv.entries.get("Label1").unwrap();
         assert_eq!(
             entries.get(&key),
             Some(&LedgerEntry::new(
-                "NodeProvider",
+                "Label1",
                 key.clone(),
                 value.clone(),
                 Operation::Upsert,
@@ -685,92 +680,92 @@ mod tests {
     }
 
     #[test]
-    fn test_upsert_with_mismatched_entry_type() {
+    fn test_upsert_with_mismatched_entry_label() {
         let mut ledger_kv = new_temp_ledger();
 
         let key = b"test_key".to_vec();
         let value = b"test_value".to_vec();
         ledger_kv
-            .upsert("Unspecified", key.clone(), value.clone())
+            .upsert("Label2", key.clone(), value.clone())
             .unwrap();
 
-        // Ensure that the entry is not added to the NodeProvider ledger since the entry_type doesn't match
-        assert_eq!(ledger_kv.entries.get("NodeProvider"), None);
+        // Ensure that the entry is not added to the NodeProvider ledger since the label doesn't match
+        assert_eq!(ledger_kv.entries.get("Label1"), None);
     }
 
     #[test]
-    fn test_delete_with_matching_entry_type() {
+    fn test_delete_with_matching_entry_label() {
         let mut ledger_kv = new_temp_ledger();
 
         let key = b"test_key".to_vec();
         let value = b"test_value".to_vec();
         ledger_kv
-            .upsert("NodeProvider", key.clone(), value.clone())
+            .upsert("Label1", key.clone(), value.clone())
             .unwrap();
-        assert_eq!(ledger_kv.get("NodeProvider", &key).unwrap(), value); // Before delete: the value is there
-        ledger_kv.delete("NodeProvider", key.clone()).unwrap();
+        assert_eq!(ledger_kv.get("Label1", &key).unwrap(), value); // Before delete: the value is there
+        ledger_kv.delete("Label1", key.clone()).unwrap();
         let expected_tombstone = Some(LedgerEntry {
-            label: "NodeProvider".to_string(),
+            label: "Label1".to_string(),
             key: key.clone(),
             value: vec![],
             operation: Operation::Delete,
         });
         assert_eq!(
-            ledger_kv.get("NodeProvider", &key).unwrap_err(),
+            ledger_kv.get("Label1", &key).unwrap_err(),
             LedgerError::EntryNotFound
         ); // After delete: the value is gone in the public interface
         assert_eq!(
             ledger_kv
                 .next_block_entries
-                .get("NodeProvider")
+                .get("Label1")
                 .unwrap()
                 .get(&key),
             expected_tombstone.as_ref()
         );
-        assert_eq!(ledger_kv.entries.get("NodeProvider"), None); // (not yet committed)
+        assert_eq!(ledger_kv.entries.get("Label1"), None); // (not yet committed)
 
         // Now commit the block
         assert!(ledger_kv.commit_block().is_ok());
 
         // And recheck: the value is gone in the public interface and deletion is in the ledger
         assert_eq!(
-            ledger_kv.entries.get("NodeProvider").unwrap().get(&key),
+            ledger_kv.entries.get("Label1").unwrap().get(&key),
             expected_tombstone.as_ref()
         );
-        assert_eq!(ledger_kv.next_block_entries.get("NodeProvider"), None);
+        assert_eq!(ledger_kv.next_block_entries.get("Label1"), None);
         assert_eq!(
-            ledger_kv.get("NodeProvider", &key).unwrap_err(),
+            ledger_kv.get("Label1", &key).unwrap_err(),
             LedgerError::EntryNotFound
         );
     }
 
     #[test]
-    fn test_delete_with_mismatched_entry_type() {
+    fn test_delete_with_mismatched_entry_label() {
         let mut ledger_kv = new_temp_ledger();
 
         let key = b"test_key".to_vec();
         let value = b"test_value".to_vec();
         ledger_kv
-            .upsert("NodeProvider", key.clone(), value.clone())
+            .upsert("Label1", key.clone(), value.clone())
             .unwrap();
-        ledger_kv.get("NodeProvider", &key).unwrap();
-        assert!(ledger_kv.entries.get("NodeProvider").is_none()); // the value is not yet committed
+        ledger_kv.get("Label1", &key).unwrap();
+        assert!(ledger_kv.entries.get("Label1").is_none()); // the value is not yet committed
         ledger_kv.commit_block().unwrap();
-        ledger_kv.entries.get("NodeProvider").unwrap();
-        ledger_kv.delete("Unspecified", key.clone()).unwrap();
+        ledger_kv.entries.get("Label1").unwrap();
+        ledger_kv.delete("Label2", key.clone()).unwrap();
 
-        // Ensure that the entry is not deleted from the ledger since the entry_type doesn't match
-        let entries_np = ledger_kv.entries.get("NodeProvider").unwrap();
+        // Ensure that the entry is not deleted from the ledger since the label doesn't match
+        let entries_np = ledger_kv.entries.get("Label1").unwrap();
         assert_eq!(
             entries_np.get(&key),
             Some(&LedgerEntry::new(
-                "NodeProvider",
+                "Label1",
                 key.clone(),
                 value.clone(),
                 Operation::Upsert,
             ))
         );
-        assert_eq!(ledger_kv.entries.get("Unspecified"), None);
+        assert_eq!(ledger_kv.entries.get("Label2"), None);
     }
 
     #[test]
@@ -781,24 +776,24 @@ mod tests {
         let key = b"test_key".to_vec();
         let value = b"test_value".to_vec();
         ledger_kv
-            .upsert("Unspecified", key.clone(), value.clone())
+            .upsert("Label2", key.clone(), value.clone())
             .unwrap();
-        ledger_kv.delete("Unspecified", key.clone()).unwrap();
+        ledger_kv.delete("Label2", key.clone()).unwrap();
         assert!(ledger_kv.commit_block().is_ok());
-        let entries = ledger_kv.entries.get("Unspecified").unwrap();
+        let entries = ledger_kv.entries.get("Label2").unwrap();
         assert_eq!(
             entries.get(&key),
             Some(LedgerEntry {
-                label: "Unspecified".to_string(),
+                label: "Label2".to_string(),
                 key: key.clone(),
                 value: vec![],
                 operation: Operation::Delete
             })
             .as_ref()
         );
-        assert_eq!(ledger_kv.entries.get("NodeProvider"), None);
+        assert_eq!(ledger_kv.entries.get("Label1"), None);
         assert_eq!(
-            ledger_kv.get("Unspecified", &key).unwrap_err(),
+            ledger_kv.get("Label2", &key).unwrap_err(),
             LedgerError::EntryNotFound
         );
     }
@@ -814,18 +809,18 @@ mod tests {
         let key = b"test_key".to_vec();
         let value = b"test_value".to_vec();
         ledger_kv
-            .upsert("Unspecified", key.clone(), value.clone())
+            .upsert("Label2", key.clone(), value.clone())
             .unwrap();
         assert!(ledger_kv.commit_block().is_ok());
         let expected_parent_hash = vec![
-            44, 47, 227, 111, 170, 182, 247, 50, 62, 223, 196, 244, 223, 162, 138, 184, 243, 171,
-            233, 153, 212, 151, 62, 60, 230, 242, 227, 39, 101, 178, 42, 141,
+            25, 222, 73, 212, 70, 56, 127, 7, 43, 93, 4, 103, 142, 248, 115, 175, 93, 113, 191,
+            187, 135, 255, 223, 107, 110, 166, 178, 178, 20, 189, 187, 251,
         ];
         ledger_kv = ledger_kv.refresh_ledger().unwrap();
 
         let entry = ledger_kv
             .entries
-            .get("Unspecified")
+            .get("Label2")
             .unwrap()
             .values()
             .next()
@@ -834,7 +829,7 @@ mod tests {
         assert_eq!(
             entry,
             LedgerEntry {
-                label: "Unspecified".to_string(),
+                label: "Label2".to_string(),
                 key,
                 value,
                 operation: Operation::Upsert,
