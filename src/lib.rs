@@ -22,7 +22,7 @@
 //! Example usage:
 //!
 //! ```rust
-//! use ledger_kv::LedgerKV;
+//! use ledger_kv::{LedgerKV, LedgerKVT};
 //!
 //! // Optional: Override the backing file path
 //! // use std::path::PathBuf;
@@ -155,8 +155,38 @@ pub struct LedgerKV {
     current_timestamp_nanos: fn() -> u64,
 }
 
-impl LedgerKV {
-    pub fn new() -> anyhow::Result<Self> {
+pub trait LedgerKVT {
+    fn new() -> anyhow::Result<Self>
+    where
+        Self: Sized;
+
+    fn begin_block(&mut self) -> anyhow::Result<()>;
+    fn commit_block(&mut self) -> anyhow::Result<()>;
+
+    fn get<S: AsRef<str>>(&self, label: S, key: &[u8]) -> Result<EntryValue, LedgerError>;
+    fn upsert<S: AsRef<str>, K: AsRef<[u8]>, V: AsRef<[u8]>>(
+        &mut self,
+        label: S,
+        key: K,
+        value: V,
+    ) -> anyhow::Result<()>;
+    fn delete<S: AsRef<str>, K: AsRef<[u8]>>(&mut self, label: S, key: K) -> anyhow::Result<()>;
+
+    fn refresh_ledger(self) -> anyhow::Result<LedgerKV>;
+    fn next_block_iter(&self, label: Option<&str>) -> impl Iterator<Item = &LedgerEntry>;
+    fn iter(&self, label: Option<&str>) -> impl Iterator<Item = &LedgerEntry>;
+    fn iter_raw(&self) -> impl Iterator<Item = anyhow::Result<LedgerBlock>> + '_;
+
+    fn num_blocks(&self) -> usize;
+
+    fn get_latest_block_hash(&self) -> Vec<u8>;
+    fn get_latest_block_timestamp_ns(&self) -> u64;
+
+    fn get_next_block_write_position(&self) -> u64;
+}
+
+impl LedgerKVT for LedgerKV {
+    fn new() -> anyhow::Result<Self> {
         LedgerKV {
             metadata: RefCell::new(Metadata::new()),
             entries: IndexMap::new(),
@@ -166,6 +196,255 @@ impl LedgerKV {
         .refresh_ledger()
     }
 
+    fn begin_block(&mut self) -> anyhow::Result<()> {
+        if !&self.next_block_entries.is_empty() {
+            return Err(anyhow::format_err!("There is already an open transaction."));
+        } else {
+            self.next_block_entries.clear();
+        }
+        Ok(())
+    }
+
+    fn commit_block(&mut self) -> anyhow::Result<()> {
+        if self.next_block_entries.is_empty() {
+            debug!("Commit of empty block invoked, skipping");
+        } else {
+            info!(
+                "Commit non-empty block, with {} entries",
+                self.next_block_entries.len()
+            );
+            let mut block_entries = Vec::new();
+            for (label, values) in self.next_block_entries.iter() {
+                self.entries
+                    .entry(label.clone())
+                    .or_default()
+                    .extend(values.clone());
+                for (_key, entry) in values.iter() {
+                    block_entries.push(entry.clone());
+                }
+            }
+            let block_timestamp = (self.current_timestamp_nanos)();
+            let hash = Self::_compute_block_chain_hash(
+                self.metadata.borrow().get_last_block_chain_hash(),
+                &block_entries,
+                block_timestamp,
+            )?;
+            let block = LedgerBlock::new(
+                block_entries,
+                self.metadata.borrow().next_block_write_position,
+                None,
+                block_timestamp,
+                hash,
+            );
+            self._journal_append_block(block)?;
+            self.next_block_entries.clear();
+        }
+        Ok(())
+    }
+
+    fn get<S: AsRef<str>>(&self, label: S, key: &[u8]) -> Result<EntryValue, LedgerError> {
+        fn lookup<'a>(
+            map: &'a IndexMap<String, IndexMap<EntryKey, LedgerEntry>>,
+            label: &String,
+            key: &[u8],
+        ) -> Option<&'a LedgerEntry> {
+            match map.get(label) {
+                Some(entries) => entries.get(key),
+                None => None,
+            }
+        }
+
+        let label = label.as_ref().to_string();
+        for map in [&self.next_block_entries, &self.entries] {
+            if let Some(entry) = lookup(map, &label, key) {
+                match entry.operation {
+                    Operation::Upsert => {
+                        return Ok(entry.value.clone());
+                    }
+                    Operation::Delete => {
+                        return Err(LedgerError::EntryNotFound);
+                    }
+                }
+            }
+        }
+
+        Err(LedgerError::EntryNotFound)
+    }
+
+    fn upsert<S: AsRef<str>, K: AsRef<[u8]>, V: AsRef<[u8]>>(
+        &mut self,
+        label: S,
+        key: K,
+        value: V,
+    ) -> anyhow::Result<()> {
+        self._insert_entry_into_next_block(label, key, value, Operation::Upsert)
+    }
+
+    fn delete<S: AsRef<str>, K: AsRef<[u8]>>(&mut self, label: S, key: K) -> anyhow::Result<()> {
+        self._insert_entry_into_next_block(label, key, Vec::new(), Operation::Delete)
+    }
+
+    fn refresh_ledger(mut self) -> anyhow::Result<LedgerKV> {
+        self.metadata.borrow_mut().clear();
+        self.entries.clear();
+        self.next_block_entries.clear();
+
+        // If the backend is empty or non-existing, just return
+        if persistent_storage_size_bytes() == 0 {
+            warn!("Persistent storage is empty");
+            return Ok(self);
+        }
+
+        let data_part_entry = partition_table::get_data_partition();
+        if persistent_storage_size_bytes() < data_part_entry.start_lba {
+            warn!("No data found in persistent storage");
+            return Ok(self);
+        }
+
+        let mut parent_hash = Vec::new();
+        let mut updates = Vec::new();
+        // Step 1: Read all Ledger Blocks
+        for ledger_block in self.iter_raw() {
+            let ledger_block = ledger_block?;
+
+            let expected_hash = Self::_compute_block_chain_hash(
+                &parent_hash,
+                &ledger_block.entries,
+                ledger_block.timestamp,
+            )?;
+            if ledger_block.hash != expected_hash {
+                return Err(anyhow::format_err!(
+                    "Hash mismatch: expected {:?}, got {:?}",
+                    expected_hash,
+                    ledger_block.hash
+                ));
+            };
+
+            parent_hash.clear();
+            parent_hash.extend_from_slice(&ledger_block.hash);
+
+            self.metadata.borrow_mut().append_block(
+                parent_hash.as_slice(),
+                ledger_block.timestamp,
+                ledger_block.offset_next.expect("offset must be set"),
+            );
+
+            updates.push(ledger_block);
+        }
+
+        // Step 2: Processing the collected data
+        for ledger_block in updates.into_iter() {
+            for ledger_entry in ledger_block.entries.iter() {
+                let entries = match self.entries.get_mut(ledger_entry.label.as_str()) {
+                    Some(entries) => entries,
+                    None => {
+                        let new_map = IndexMap::new();
+                        self.entries.insert(ledger_entry.label.clone(), new_map);
+                        self.entries
+                            .get_mut(&ledger_entry.label)
+                            .ok_or(anyhow::format_err!(
+                                "Entry label {:?} not found",
+                                ledger_entry.label
+                            ))?
+                    }
+                };
+
+                match &ledger_entry.operation {
+                    Operation::Upsert => {
+                        entries.insert(ledger_entry.key.clone(), ledger_entry.clone());
+                    }
+                    Operation::Delete => {
+                        entries.swap_remove(&ledger_entry.key);
+                    }
+                }
+            }
+        }
+
+        Ok(self)
+    }
+
+    fn next_block_iter(&self, label: Option<&str>) -> impl Iterator<Item = &LedgerEntry> {
+        match label {
+            Some(label) => self
+                .next_block_entries
+                .get(label)
+                .map(|entries| entries.values())
+                .unwrap_or_default()
+                .filter(|entry| entry.operation == Operation::Upsert)
+                .collect::<Vec<_>>()
+                .into_iter(),
+            None => self
+                .next_block_entries
+                .values()
+                .flat_map(|entries| entries.values())
+                .filter(|entry| entry.operation == Operation::Upsert)
+                .collect::<Vec<_>>()
+                .into_iter(),
+        }
+    }
+
+    fn iter(&self, label: Option<&str>) -> impl Iterator<Item = &LedgerEntry> {
+        match label {
+            Some(label) => self
+                .entries
+                .get(label)
+                .map(|entries| entries.values())
+                .unwrap_or_default()
+                .filter(|entry| entry.operation == Operation::Upsert)
+                .collect::<Vec<_>>()
+                .into_iter(),
+            None => self
+                .entries
+                .values()
+                .flat_map(|entries| entries.values())
+                .filter(|entry| entry.operation == Operation::Upsert)
+                .collect::<Vec<_>>()
+                .into_iter(),
+        }
+    }
+
+    fn iter_raw(&self) -> impl Iterator<Item = anyhow::Result<LedgerBlock>> + '_ {
+        let data_start = partition_table::get_data_partition().start_lba;
+        (0..).scan(data_start, |state, _| {
+            let ledger_block = match self._journal_read_block(*state) {
+                Ok(block) => block,
+                Err(LedgerError::BlockEmpty) => return None,
+                Err(LedgerError::BlockCorrupted(err)) => {
+                    return Some(Err(anyhow::format_err!(
+                        "Failed to read Ledger block: {}",
+                        err
+                    )))
+                }
+                Err(err) => {
+                    return Some(Err(anyhow::format_err!(
+                        "Failed to read Ledger block: {}",
+                        err
+                    )))
+                }
+            };
+            *state = ledger_block.offset_next.expect("offset_next must be set");
+            Some(Ok(ledger_block))
+        })
+    }
+
+    fn num_blocks(&self) -> usize {
+        self.metadata.borrow().num_blocks
+    }
+
+    fn get_latest_block_hash(&self) -> Vec<u8> {
+        self.metadata.borrow().get_last_block_chain_hash().to_vec()
+    }
+
+    fn get_latest_block_timestamp_ns(&self) -> u64 {
+        self.metadata.borrow().get_last_block_timestamp_ns()
+    }
+
+    fn get_next_block_write_position(&self) -> u64 {
+        self.metadata.borrow().next_block_write_position
+    }
+}
+
+impl LedgerKV {
     #[cfg(test)]
     fn with_timestamp_fn(self, get_timestamp_nanos: fn() -> u64) -> Self {
         LedgerKV {
@@ -258,81 +537,6 @@ impl LedgerKV {
         }
     }
 
-    pub fn begin_block(&mut self) -> anyhow::Result<()> {
-        if !&self.next_block_entries.is_empty() {
-            return Err(anyhow::format_err!("There is already an open transaction."));
-        } else {
-            self.next_block_entries.clear();
-        }
-        Ok(())
-    }
-
-    pub fn commit_block(&mut self) -> anyhow::Result<()> {
-        if self.next_block_entries.is_empty() {
-            debug!("Commit of empty block invoked, skipping");
-        } else {
-            info!(
-                "Commit non-empty block, with {} entries",
-                self.next_block_entries.len()
-            );
-            let mut block_entries = Vec::new();
-            for (label, values) in self.next_block_entries.iter() {
-                self.entries
-                    .entry(label.clone())
-                    .or_default()
-                    .extend(values.clone());
-                for (_key, entry) in values.iter() {
-                    block_entries.push(entry.clone());
-                }
-            }
-            let block_timestamp = (self.current_timestamp_nanos)();
-            let hash = Self::_compute_block_chain_hash(
-                self.metadata.borrow().get_last_block_chain_hash(),
-                &block_entries,
-                block_timestamp,
-            )?;
-            let block = LedgerBlock::new(
-                block_entries,
-                self.metadata.borrow().next_block_write_position,
-                None,
-                block_timestamp,
-                hash,
-            );
-            self._journal_append_block(block)?;
-            self.next_block_entries.clear();
-        }
-        Ok(())
-    }
-
-    pub fn get<S: AsRef<str>>(&self, label: S, key: &[u8]) -> Result<EntryValue, LedgerError> {
-        fn lookup<'a>(
-            map: &'a IndexMap<String, IndexMap<EntryKey, LedgerEntry>>,
-            label: &String,
-            key: &[u8],
-        ) -> Option<&'a LedgerEntry> {
-            match map.get(label) {
-                Some(entries) => entries.get(key),
-                None => None,
-            }
-        }
-
-        let label = label.as_ref().to_string();
-        for map in [&self.next_block_entries, &self.entries] {
-            if let Some(entry) = lookup(map, &label, key) {
-                match entry.operation {
-                    Operation::Upsert => {
-                        return Ok(entry.value.clone());
-                    }
-                    Operation::Delete => {
-                        return Err(LedgerError::EntryNotFound);
-                    }
-                }
-            }
-        }
-
-        Err(LedgerError::EntryNotFound)
-    }
-
     fn _insert_entry_into_next_block<S: AsRef<str>, K: AsRef<[u8]>, V: AsRef<[u8]>>(
         &mut self,
         label: S,
@@ -354,182 +558,6 @@ impl LedgerKV {
         };
 
         Ok(())
-    }
-
-    pub fn upsert<S: AsRef<str>, K: AsRef<[u8]>, V: AsRef<[u8]>>(
-        &mut self,
-        label: S,
-        key: K,
-        value: V,
-    ) -> anyhow::Result<()> {
-        self._insert_entry_into_next_block(label, key, value, Operation::Upsert)
-    }
-
-    pub fn delete<S: AsRef<str>, K: AsRef<[u8]>>(
-        &mut self,
-        label: S,
-        key: K,
-    ) -> anyhow::Result<()> {
-        self._insert_entry_into_next_block(label, key, Vec::new(), Operation::Delete)
-    }
-
-    pub fn refresh_ledger(mut self) -> anyhow::Result<LedgerKV> {
-        self.metadata.borrow_mut().clear();
-        self.entries.clear();
-        self.next_block_entries.clear();
-
-        // If the backend is empty or non-existing, just return
-        if persistent_storage_size_bytes() == 0 {
-            warn!("Persistent storage is empty");
-            return Ok(self);
-        }
-
-        let data_part_entry = partition_table::get_data_partition();
-        if persistent_storage_size_bytes() < data_part_entry.start_lba {
-            warn!("No data found in persistent storage");
-            return Ok(self);
-        }
-
-        let mut parent_hash = Vec::new();
-        let mut updates = Vec::new();
-        // Step 1: Read all Ledger Blocks
-        for ledger_block in self.iter_raw() {
-            let ledger_block = ledger_block?;
-
-            let expected_hash = Self::_compute_block_chain_hash(
-                &parent_hash,
-                &ledger_block.entries,
-                ledger_block.timestamp,
-            )?;
-            if ledger_block.hash != expected_hash {
-                return Err(anyhow::format_err!(
-                    "Hash mismatch: expected {:?}, got {:?}",
-                    expected_hash,
-                    ledger_block.hash
-                ));
-            };
-
-            parent_hash.clear();
-            parent_hash.extend_from_slice(&ledger_block.hash);
-
-            self.metadata.borrow_mut().append_block(
-                parent_hash.as_slice(),
-                ledger_block.timestamp,
-                ledger_block.offset_next.expect("offset must be set"),
-            );
-
-            updates.push(ledger_block);
-        }
-
-        // Step 2: Processing the collected data
-        for ledger_block in updates.into_iter() {
-            for ledger_entry in ledger_block.entries.iter() {
-                let entries = match self.entries.get_mut(ledger_entry.label.as_str()) {
-                    Some(entries) => entries,
-                    None => {
-                        let new_map = IndexMap::new();
-                        self.entries.insert(ledger_entry.label.clone(), new_map);
-                        self.entries
-                            .get_mut(&ledger_entry.label)
-                            .ok_or(anyhow::format_err!(
-                                "Entry label {:?} not found",
-                                ledger_entry.label
-                            ))?
-                    }
-                };
-
-                match &ledger_entry.operation {
-                    Operation::Upsert => {
-                        entries.insert(ledger_entry.key.clone(), ledger_entry.clone());
-                    }
-                    Operation::Delete => {
-                        entries.swap_remove(&ledger_entry.key);
-                    }
-                }
-            }
-        }
-
-        Ok(self)
-    }
-
-    pub fn next_block_iter(&self, label: Option<&str>) -> impl Iterator<Item = &LedgerEntry> {
-        match label {
-            Some(label) => self
-                .next_block_entries
-                .get(label)
-                .map(|entries| entries.values())
-                .unwrap_or_default()
-                .filter(|entry| entry.operation == Operation::Upsert)
-                .collect::<Vec<_>>()
-                .into_iter(),
-            None => self
-                .next_block_entries
-                .values()
-                .flat_map(|entries| entries.values())
-                .filter(|entry| entry.operation == Operation::Upsert)
-                .collect::<Vec<_>>()
-                .into_iter(),
-        }
-    }
-
-    pub fn iter(&self, label: Option<&str>) -> impl Iterator<Item = &LedgerEntry> {
-        match label {
-            Some(label) => self
-                .entries
-                .get(label)
-                .map(|entries| entries.values())
-                .unwrap_or_default()
-                .filter(|entry| entry.operation == Operation::Upsert)
-                .collect::<Vec<_>>()
-                .into_iter(),
-            None => self
-                .entries
-                .values()
-                .flat_map(|entries| entries.values())
-                .filter(|entry| entry.operation == Operation::Upsert)
-                .collect::<Vec<_>>()
-                .into_iter(),
-        }
-    }
-
-    pub fn iter_raw(&self) -> impl Iterator<Item = anyhow::Result<LedgerBlock>> + '_ {
-        let data_start = partition_table::get_data_partition().start_lba;
-        (0..).scan(data_start, |state, _| {
-            let ledger_block = match self._journal_read_block(*state) {
-                Ok(block) => block,
-                Err(LedgerError::BlockEmpty) => return None,
-                Err(LedgerError::BlockCorrupted(err)) => {
-                    return Some(Err(anyhow::format_err!(
-                        "Failed to read Ledger block: {}",
-                        err
-                    )))
-                }
-                Err(err) => {
-                    return Some(Err(anyhow::format_err!(
-                        "Failed to read Ledger block: {}",
-                        err
-                    )))
-                }
-            };
-            *state = ledger_block.offset_next.expect("offset_next must be set");
-            Some(Ok(ledger_block))
-        })
-    }
-
-    pub fn num_blocks(&self) -> usize {
-        self.metadata.borrow().num_blocks
-    }
-
-    pub fn get_latest_block_hash(&self) -> Vec<u8> {
-        self.metadata.borrow().get_last_block_chain_hash().to_vec()
-    }
-
-    pub fn get_latest_block_timestamp_ns(&self) -> u64 {
-        self.metadata.borrow().get_last_block_timestamp_ns()
-    }
-
-    pub fn get_next_block_write_position(&self) -> u64 {
-        self.metadata.borrow().next_block_write_position
     }
 }
 
@@ -567,7 +595,7 @@ impl std::fmt::Display for LedgerError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::platform_specific;
+
     fn log_init() {
         // Set log level to info by default
         if std::env::var("RUST_LOG").is_err() {

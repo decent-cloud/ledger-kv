@@ -2,7 +2,7 @@
 ///
 /// The CLI allows various ledger operations, such as listing, inserting/updating (upserting), and deleting entries.
 ///
-use ledger_kv::{platform_specific, LedgerKV};
+use ledger_kv::{platform_specific, LedgerKV, LedgerKVT};
 
 use clap::{arg, Arg, Command};
 use std::path::PathBuf;
