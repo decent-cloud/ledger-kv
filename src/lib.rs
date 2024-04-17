@@ -22,7 +22,7 @@
 //! Example usage:
 //!
 //! ```rust
-//! use ledger_kv::{LedgerKV, LedgerKVT};
+//! use ledger_kv::{LedgerKV};
 //!
 //! // Optional: Override the backing file path
 //! // use std::path::PathBuf;
@@ -155,38 +155,8 @@ pub struct LedgerKV {
     current_timestamp_nanos: fn() -> u64,
 }
 
-pub trait LedgerKVT {
-    fn new() -> anyhow::Result<Self>
-    where
-        Self: Sized;
-
-    fn begin_block(&mut self) -> anyhow::Result<()>;
-    fn commit_block(&mut self) -> anyhow::Result<()>;
-
-    fn get<S: AsRef<str>>(&self, label: S, key: &[u8]) -> Result<EntryValue, LedgerError>;
-    fn upsert<S: AsRef<str>, K: AsRef<[u8]>, V: AsRef<[u8]>>(
-        &mut self,
-        label: S,
-        key: K,
-        value: V,
-    ) -> anyhow::Result<()>;
-    fn delete<S: AsRef<str>, K: AsRef<[u8]>>(&mut self, label: S, key: K) -> anyhow::Result<()>;
-
-    fn refresh_ledger(self) -> anyhow::Result<LedgerKV>;
-    fn next_block_iter(&self, label: Option<&str>) -> impl Iterator<Item = &LedgerEntry>;
-    fn iter(&self, label: Option<&str>) -> impl Iterator<Item = &LedgerEntry>;
-    fn iter_raw(&self) -> impl Iterator<Item = anyhow::Result<LedgerBlock>> + '_;
-
-    fn num_blocks(&self) -> usize;
-
-    fn get_latest_block_hash(&self) -> Vec<u8>;
-    fn get_latest_block_timestamp_ns(&self) -> u64;
-
-    fn get_next_block_write_position(&self) -> u64;
-}
-
-impl LedgerKVT for LedgerKV {
-    fn new() -> anyhow::Result<Self> {
+impl LedgerKV {
+    pub fn new() -> anyhow::Result<Self> {
         LedgerKV {
             metadata: RefCell::new(Metadata::new()),
             entries: IndexMap::new(),
@@ -196,7 +166,15 @@ impl LedgerKVT for LedgerKV {
         .refresh_ledger()
     }
 
-    fn begin_block(&mut self) -> anyhow::Result<()> {
+    #[cfg(test)]
+    fn with_timestamp_fn(self, get_timestamp_nanos: fn() -> u64) -> Self {
+        LedgerKV {
+            current_timestamp_nanos: get_timestamp_nanos,
+            ..self
+        }
+    }
+
+    pub fn begin_block(&mut self) -> anyhow::Result<()> {
         if !&self.next_block_entries.is_empty() {
             return Err(anyhow::format_err!("There is already an open transaction."));
         } else {
@@ -205,7 +183,7 @@ impl LedgerKVT for LedgerKV {
         Ok(())
     }
 
-    fn commit_block(&mut self) -> anyhow::Result<()> {
+    pub fn commit_block(&mut self) -> anyhow::Result<()> {
         if self.next_block_entries.is_empty() {
             debug!("Commit of empty block invoked, skipping");
         } else {
@@ -242,7 +220,7 @@ impl LedgerKVT for LedgerKV {
         Ok(())
     }
 
-    fn get<S: AsRef<str>>(&self, label: S, key: &[u8]) -> Result<EntryValue, LedgerError> {
+    pub fn get<S: AsRef<str>>(&self, label: S, key: &[u8]) -> Result<EntryValue, LedgerError> {
         fn lookup<'a>(
             map: &'a IndexMap<String, IndexMap<EntryKey, LedgerEntry>>,
             label: &String,
@@ -271,7 +249,7 @@ impl LedgerKVT for LedgerKV {
         Err(LedgerError::EntryNotFound)
     }
 
-    fn upsert<S: AsRef<str>, K: AsRef<[u8]>, V: AsRef<[u8]>>(
+    pub fn upsert<S: AsRef<str>, K: AsRef<[u8]>, V: AsRef<[u8]>>(
         &mut self,
         label: S,
         key: K,
@@ -280,11 +258,15 @@ impl LedgerKVT for LedgerKV {
         self._insert_entry_into_next_block(label, key, value, Operation::Upsert)
     }
 
-    fn delete<S: AsRef<str>, K: AsRef<[u8]>>(&mut self, label: S, key: K) -> anyhow::Result<()> {
+    pub fn delete<S: AsRef<str>, K: AsRef<[u8]>>(
+        &mut self,
+        label: S,
+        key: K,
+    ) -> anyhow::Result<()> {
         self._insert_entry_into_next_block(label, key, Vec::new(), Operation::Delete)
     }
 
-    fn refresh_ledger(mut self) -> anyhow::Result<LedgerKV> {
+    pub fn refresh_ledger(mut self) -> anyhow::Result<LedgerKV> {
         self.metadata.borrow_mut().clear();
         self.entries.clear();
         self.next_block_entries.clear();
@@ -363,7 +345,7 @@ impl LedgerKVT for LedgerKV {
         Ok(self)
     }
 
-    fn next_block_iter(&self, label: Option<&str>) -> impl Iterator<Item = &LedgerEntry> {
+    pub fn next_block_iter(&self, label: Option<&str>) -> impl Iterator<Item = &LedgerEntry> {
         match label {
             Some(label) => self
                 .next_block_entries
@@ -383,7 +365,7 @@ impl LedgerKVT for LedgerKV {
         }
     }
 
-    fn iter(&self, label: Option<&str>) -> impl Iterator<Item = &LedgerEntry> {
+    pub fn iter(&self, label: Option<&str>) -> impl Iterator<Item = &LedgerEntry> {
         match label {
             Some(label) => self
                 .entries
@@ -403,7 +385,7 @@ impl LedgerKVT for LedgerKV {
         }
     }
 
-    fn iter_raw(&self) -> impl Iterator<Item = anyhow::Result<LedgerBlock>> + '_ {
+    pub fn iter_raw(&self) -> impl Iterator<Item = anyhow::Result<LedgerBlock>> + '_ {
         let data_start = partition_table::get_data_partition().start_lba;
         (0..).scan(data_start, |state, _| {
             let ledger_block = match self._journal_read_block(*state) {
@@ -427,30 +409,20 @@ impl LedgerKVT for LedgerKV {
         })
     }
 
-    fn num_blocks(&self) -> usize {
+    pub fn num_blocks(&self) -> usize {
         self.metadata.borrow().num_blocks
     }
 
-    fn get_latest_block_hash(&self) -> Vec<u8> {
+    pub fn get_latest_block_hash(&self) -> Vec<u8> {
         self.metadata.borrow().get_last_block_chain_hash().to_vec()
     }
 
-    fn get_latest_block_timestamp_ns(&self) -> u64 {
+    pub fn get_latest_block_timestamp_ns(&self) -> u64 {
         self.metadata.borrow().get_last_block_timestamp_ns()
     }
 
-    fn get_next_block_write_position(&self) -> u64 {
+    pub fn get_next_block_write_position(&self) -> u64 {
         self.metadata.borrow().next_block_write_position
-    }
-}
-
-impl LedgerKV {
-    #[cfg(test)]
-    fn with_timestamp_fn(self, get_timestamp_nanos: fn() -> u64) -> Self {
-        LedgerKV {
-            current_timestamp_nanos: get_timestamp_nanos,
-            ..self
-        }
     }
 
     fn _compute_block_chain_hash(
