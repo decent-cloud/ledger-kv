@@ -165,7 +165,7 @@ impl LedgerKV {
     pub fn new(labels_to_index: Option<Vec<String>>) -> anyhow::Result<Self> {
         let mut result = LedgerKV {
             metadata: RefCell::new(Metadata::new()),
-            labels_to_index: labels_to_index.map(|labels| AHashSet::from_iter(labels)),
+            labels_to_index: labels_to_index.map(AHashSet::from_iter),
             entries: IndexMap::new(),
             next_block_entries: IndexMap::new(),
             current_timestamp_nanos: platform_specific::get_timestamp_nanos,

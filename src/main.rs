@@ -91,18 +91,14 @@ fn main() -> anyhow::Result<()> {
 
     if let Some((key, value)) = args.upsert {
         // Upsert (insert/update) an entry in the ledger
-        ledger_kv.upsert(
-            "Unspecified",
-            key.as_bytes().to_vec(),
-            value.as_bytes().to_vec(),
-        )?;
+        ledger_kv.upsert("Unspecified", key.as_bytes(), value.as_bytes())?;
         println!("Upsert entry with KEY: {}, VALUE: {}", key, value);
         ledger_kv.commit_block()?;
     }
 
     if let Some(key) = args.delete {
         // Delete an entry from the ledger
-        ledger_kv.delete("Unspecified", key.as_bytes().to_vec())?;
+        ledger_kv.delete("Unspecified", key.as_bytes())?;
         println!("Delete entry with KEY: {}", key);
     }
 
