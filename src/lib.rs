@@ -163,14 +163,15 @@ impl LedgerKV {
     /// Create a new LedgerKV instance.
     /// If `labels_to_index` is `None`, then all labels will be indexed.
     pub fn new(labels_to_index: Option<Vec<String>>) -> anyhow::Result<Self> {
-        LedgerKV {
+        let mut result = LedgerKV {
             metadata: RefCell::new(Metadata::new()),
             labels_to_index: labels_to_index.map(|labels| AHashSet::from_iter(labels)),
             entries: IndexMap::new(),
             next_block_entries: IndexMap::new(),
             current_timestamp_nanos: platform_specific::get_timestamp_nanos,
-        }
-        .refresh_ledger()
+        };
+        result.refresh_ledger()?;
+        Ok(result)
     }
 
     #[cfg(test)]
@@ -278,7 +279,7 @@ impl LedgerKV {
         self._insert_entry_into_next_block(label, key, Vec::new(), Operation::Delete)
     }
 
-    pub fn refresh_ledger(mut self) -> anyhow::Result<LedgerKV> {
+    pub fn refresh_ledger(&mut self) -> anyhow::Result<()> {
         self.metadata.borrow_mut().clear();
         self.entries.clear();
         self.next_block_entries.clear();
@@ -286,13 +287,13 @@ impl LedgerKV {
         // If the backend is empty or non-existing, just return
         if persistent_storage_size_bytes() == 0 {
             warn!("Persistent storage is empty");
-            return Ok(self);
+            return Ok(());
         }
 
         let data_part_entry = partition_table::get_data_partition();
         if persistent_storage_size_bytes() < data_part_entry.start_lba {
             warn!("No data found in persistent storage");
-            return Ok(self);
+            return Ok(());
         }
 
         let mut parent_hash = Vec::new();
@@ -362,7 +363,7 @@ impl LedgerKV {
         }
         info!("Ledger refreshed successfully");
 
-        Ok(self)
+        Ok(())
     }
 
     pub fn next_block_iter(&self, label: Option<&str>) -> impl Iterator<Item = &LedgerEntry> {
@@ -862,7 +863,6 @@ mod tests {
         info!("New temp ledger created");
         info!("ledger: {:?}", ledger_kv);
 
-        // Test refresh_ledger
         let key = b"test_key".to_vec();
         let value = b"test_value".to_vec();
         ledger_kv
@@ -873,7 +873,7 @@ mod tests {
             25, 222, 73, 212, 70, 56, 127, 7, 43, 93, 4, 103, 142, 248, 115, 175, 93, 113, 191,
             187, 135, 255, 223, 107, 110, 166, 178, 178, 20, 189, 187, 251,
         ];
-        ledger_kv = ledger_kv.refresh_ledger().unwrap();
+        ledger_kv.refresh_ledger().unwrap();
 
         let entry = ledger_kv
             .entries
