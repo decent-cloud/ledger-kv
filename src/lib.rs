@@ -502,8 +502,8 @@ impl LedgerKV {
         persistent_storage_read64(offset, &mut buf)
             .map_err(|e| LedgerError::BlockCorrupted(e.to_string()))?;
         let block_len: u32 = u32::from_le_bytes(buf);
-        debug!("offset 0x{:0x} read bytes: {:?}", offset, buf);
-        debug!("block_len: {}", block_len);
+        // debug!("offset 0x{:0x} read bytes: {:?}", offset, buf);
+        // debug!("block_len: {}", block_len);
 
         if block_len == 0 {
             return Err(LedgerError::BlockEmpty);
