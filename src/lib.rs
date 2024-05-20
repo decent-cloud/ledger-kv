@@ -472,10 +472,6 @@ impl LedgerKV {
         let block_len_bytes: u32 = serialized_data.len() as u32;
         let serialized_data_len = block_len_bytes.to_le_bytes();
 
-        info!(
-            "entry_len_bytes {} serialized_data_len: {:?} serialized_data: {:?}",
-            block_len_bytes, serialized_data_len, serialized_data
-        );
         persistent_storage_write64(
             self.metadata.borrow().next_block_write_position,
             &serialized_data_len,
