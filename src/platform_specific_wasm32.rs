@@ -65,7 +65,7 @@ pub fn persistent_storage_size_bytes() -> u64 {
 
 pub fn persistent_storage_read64(offset: u64, buf: &mut [u8]) -> anyhow::Result<()> {
     ic_cdk::api::stable::stable64_read(offset, buf);
-    info!(
+    debug!(
         "Reading {} bytes from persistent storage @offset 0x{:0x}",
         buf.len(),
         offset

@@ -185,7 +185,7 @@ impl LedgerKV {
 
     pub fn commit_block(&mut self) -> anyhow::Result<()> {
         if self.next_block_entries.is_empty() {
-            debug!("Commit of empty block invoked, skipping");
+            // debug!("Commit of empty block invoked, skipping");
         } else {
             info!(
                 "Commit non-empty block, with {} entries",
@@ -341,6 +341,7 @@ impl LedgerKV {
                 }
             }
         }
+        info!("Ledger refreshed successfully");
 
         Ok(self)
     }
@@ -482,7 +483,7 @@ impl LedgerKV {
         persistent_storage_read64(offset, &mut buf)
             .map_err(|e| LedgerError::BlockCorrupted(e.to_string()))?;
         let block_len: u32 = u32::from_le_bytes(buf);
-        debug!("read bytes: {:?}", buf);
+        debug!("offset 0x{:0x} read bytes: {:?}", offset, buf);
         debug!("block_len: {}", block_len);
 
         if block_len == 0 {
