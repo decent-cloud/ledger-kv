@@ -30,7 +30,7 @@
 //! // ledger_kv::platform_specific::override_backing_file(Some(ledger_path));
 //!
 //! // Create a new LedgerKV instance
-//! let mut ledger_kv = LedgerKV::new().expect("Failed to create LedgerKV");
+//! let mut ledger_kv = LedgerKV::new(None).expect("Failed to create LedgerKV");
 //!
 //! // Insert a few new entries, each with a separate label
 //! ledger_kv.upsert("Label1", b"key1".to_vec(), b"value1".to_vec()).unwrap();
@@ -85,6 +85,9 @@ use indexmap::IndexMap;
 pub use ledger_entry::{EntryKey, EntryValue, LedgerBlock, LedgerEntry, Operation};
 use sha2::{Digest, Sha256};
 use std::{cell::RefCell, fmt::Debug};
+use std::{collections::HashSet, hash::BuildHasherDefault};
+
+pub type AHashSet<K> = HashSet<K, BuildHasherDefault<ahash::AHasher>>;
 
 /// Struct representing the metadata of the ledger.
 #[derive(BorshSerialize, BorshDeserialize, Clone, Debug)]
@@ -150,15 +153,19 @@ impl Metadata {
 #[derive(Debug)]
 pub struct LedgerKV {
     metadata: RefCell<Metadata>,
+    labels_to_index: Option<AHashSet<String>>,
     entries: IndexMap<String, IndexMap<EntryKey, LedgerEntry>>,
     next_block_entries: IndexMap<String, IndexMap<EntryKey, LedgerEntry>>,
     current_timestamp_nanos: fn() -> u64,
 }
 
 impl LedgerKV {
-    pub fn new() -> anyhow::Result<Self> {
+    /// Create a new LedgerKV instance.
+    /// If `labels_to_index` is `None`, then all labels will be indexed.
+    pub fn new(labels_to_index: Option<Vec<String>>) -> anyhow::Result<Self> {
         LedgerKV {
             metadata: RefCell::new(Metadata::new()),
+            labels_to_index: labels_to_index.map(|labels| AHashSet::from_iter(labels)),
             entries: IndexMap::new(),
             next_block_entries: IndexMap::new(),
             current_timestamp_nanos: platform_specific::get_timestamp_nanos,
@@ -193,10 +200,15 @@ impl LedgerKV {
             );
             let mut block_entries = Vec::new();
             for (label, values) in self.next_block_entries.iter() {
-                self.entries
-                    .entry(label.clone())
-                    .or_default()
-                    .extend(values.clone());
+                if match &self.labels_to_index {
+                    Some(labels_to_index) => labels_to_index.contains(label),
+                    None => true,
+                } {
+                    self.entries
+                        .entry(label.clone())
+                        .or_default()
+                        .extend(values.clone())
+                };
                 for (_key, entry) in values.iter() {
                     block_entries.push(entry.clone());
                 }
@@ -314,9 +326,16 @@ impl LedgerKV {
             updates.push(ledger_block);
         }
 
-        // Step 2: Processing the collected data
+        // Step 2: Add ledger entries into the index (self.entries) for quick search
         for ledger_block in updates.into_iter() {
             for ledger_entry in ledger_block.entries.iter() {
+                // Skip entries that are not in the labels_to_index
+                if !match &self.labels_to_index {
+                    Some(labels_to_index) => labels_to_index.contains(ledger_entry.label.as_str()),
+                    None => true,
+                } {
+                    continue;
+                }
                 let entries = match self.entries.get_mut(ledger_entry.label.as_str()) {
                     Some(entries) => entries,
                     None => {
@@ -567,6 +586,8 @@ impl std::fmt::Display for LedgerError {
 
 #[cfg(test)]
 mod tests {
+    use std::vec;
+
     use super::*;
 
     fn log_init() {
@@ -577,7 +598,7 @@ mod tests {
         let _ = env_logger::builder().is_test(true).try_init();
     }
 
-    fn new_temp_ledger() -> LedgerKV {
+    fn new_temp_ledger(labels_to_index: Option<Vec<String>>) -> LedgerKV {
         log_init();
         info!("Create temp ledger");
         // Create a temporary directory for the test
@@ -592,7 +613,7 @@ mod tests {
             0
         }
 
-        LedgerKV::new()
+        LedgerKV::new(labels_to_index)
             .expect("Failed to create a temp ledger for the test")
             .with_timestamp_fn(mock_get_timestamp_nanos)
     }
@@ -634,7 +655,7 @@ mod tests {
 
     #[test]
     fn test_upsert() {
-        let mut ledger_kv = new_temp_ledger();
+        let mut ledger_kv = new_temp_ledger(None);
 
         // Test upsert
         let key = b"test_key".to_vec();
@@ -657,7 +678,7 @@ mod tests {
 
     #[test]
     fn test_upsert_with_matching_entry_label() {
-        let mut ledger_kv = new_temp_ledger();
+        let mut ledger_kv = new_temp_ledger(None);
 
         let key = b"test_key".to_vec();
         let value = b"test_value".to_vec();
@@ -681,7 +702,7 @@ mod tests {
 
     #[test]
     fn test_upsert_with_mismatched_entry_label() {
-        let mut ledger_kv = new_temp_ledger();
+        let mut ledger_kv = new_temp_ledger(None);
 
         let key = b"test_key".to_vec();
         let value = b"test_value".to_vec();
@@ -695,7 +716,7 @@ mod tests {
 
     #[test]
     fn test_delete_with_matching_entry_label() {
-        let mut ledger_kv = new_temp_ledger();
+        let mut ledger_kv = new_temp_ledger(None);
 
         let key = b"test_key".to_vec();
         let value = b"test_value".to_vec();
@@ -741,7 +762,7 @@ mod tests {
 
     #[test]
     fn test_delete_with_mismatched_entry_label() {
-        let mut ledger_kv = new_temp_ledger();
+        let mut ledger_kv = new_temp_ledger(None);
 
         let key = b"test_key".to_vec();
         let value = b"test_value".to_vec();
@@ -769,8 +790,48 @@ mod tests {
     }
 
     #[test]
+    fn test_labels_to_index() {
+        let mut ledger_kv = new_temp_ledger(Some(vec!["Label1".to_string()]));
+
+        let key = b"test_key".to_vec();
+        let value1 = b"test_value1".to_vec();
+        let value2 = b"test_value2".to_vec();
+        ledger_kv
+            .upsert("Label1", key.clone(), value1.clone())
+            .unwrap();
+        ledger_kv
+            .upsert("Label2", key.clone(), value2.clone())
+            .unwrap();
+        assert!(ledger_kv.entries.get("Label1").is_none()); // the value is not yet committed
+        assert!(ledger_kv.entries.get("Label2").is_none()); // the value is not yet committed
+        ledger_kv.commit_block().unwrap();
+        assert_eq!(ledger_kv.get("Label1", &key).unwrap(), value1);
+        assert_eq!(
+            ledger_kv.get("Label2", &key).unwrap_err(),
+            LedgerError::EntryNotFound
+        );
+        // Delete the non-indexed entry, ensure that the indexed entry is still there
+        ledger_kv.delete("Label2", key.clone()).unwrap();
+        assert_eq!(ledger_kv.get("Label1", &key).unwrap(), value1);
+        assert_eq!(
+            ledger_kv.get("Label2", &key).unwrap_err(),
+            LedgerError::EntryNotFound
+        );
+        // Delete the indexed entry, ensure that it's gone
+        ledger_kv.delete("Label1", key.clone()).unwrap();
+        assert_eq!(
+            ledger_kv.get("Label1", &key).unwrap_err(),
+            LedgerError::EntryNotFound
+        );
+        assert_eq!(
+            ledger_kv.get("Label2", &key).unwrap_err(),
+            LedgerError::EntryNotFound
+        );
+    }
+
+    #[test]
     fn test_delete() {
-        let mut ledger_kv = new_temp_ledger();
+        let mut ledger_kv = new_temp_ledger(None);
 
         // Test delete
         let key = b"test_key".to_vec();
@@ -800,7 +861,7 @@ mod tests {
 
     #[test]
     fn test_refresh_ledger() {
-        let mut ledger_kv = new_temp_ledger();
+        let mut ledger_kv = new_temp_ledger(None);
 
         info!("New temp ledger created");
         info!("ledger: {:?}", ledger_kv);

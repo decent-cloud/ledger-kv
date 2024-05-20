@@ -79,7 +79,7 @@ fn main() -> anyhow::Result<()> {
     let ledger_path = args.path.as_ref().map(|p| PathBuf::from_str(p).unwrap());
 
     platform_specific::override_backing_file(ledger_path);
-    let mut ledger_kv = LedgerKV::new().expect("Failed to create ledger");
+    let mut ledger_kv = LedgerKV::new(None).expect("Failed to create ledger");
 
     if args.list {
         println!("Listing entries:");
