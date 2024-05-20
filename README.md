@@ -25,8 +25,8 @@ Here is a basic example to get you started:
 use ledger_kv::LedgerKV;
 
 fn main() {
-    // Create a new LedgerKV instance
-    let mut ledger_kv = LedgerKV::new().expect("Failed to create LedgerKV");
+    // Create a new LedgerKV instance, and index all labels for quick search
+    let mut ledger_kv = LedgerKV::new(None).expect("Failed to create LedgerKV");
 
     // Insert a few new entries, each with a separate label
     ledger_kv.upsert("Label1", b"key1".to_vec(), b"value1".to_vec()).unwrap();
