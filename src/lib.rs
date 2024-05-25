@@ -267,7 +267,7 @@ impl LedgerKV {
         label: S,
         key: K,
         value: V,
-    ) -> anyhow::Result<()> {
+    ) -> Result<(), LedgerError> {
         self._insert_entry_into_next_block(label, key, value, Operation::Upsert)
     }
 
@@ -275,7 +275,7 @@ impl LedgerKV {
         &mut self,
         label: S,
         key: K,
-    ) -> anyhow::Result<()> {
+    ) -> Result<(), LedgerError> {
         self._insert_entry_into_next_block(label, key, Vec::new(), Operation::Delete)
     }
 
@@ -513,7 +513,8 @@ impl LedgerKV {
 
         // Read the block as raw bytes
         let mut buf = vec![0u8; block_len as usize];
-        persistent_storage_read64(offset + std::mem::size_of::<u32>() as u64, &mut buf)?;
+        persistent_storage_read64(offset + std::mem::size_of::<u32>() as u64, &mut buf)
+            .map_err(|e| LedgerError::Other(e.to_string()))?;
         match LedgerBlock::deserialize(&mut buf.as_ref())
             .map_err(|err| LedgerError::BlockCorrupted(err.to_string()))
         {
@@ -532,7 +533,7 @@ impl LedgerKV {
         key: K,
         value: V,
         operation: Operation,
-    ) -> anyhow::Result<()> {
+    ) -> Result<(), LedgerError> {
         let entry = LedgerEntry::new(label.as_ref(), key, value, operation);
         match self.next_block_entries.get_mut(&entry.label) {
             Some(entries) => {
@@ -558,15 +559,15 @@ pub enum LedgerError {
     Other(String),
 }
 
-impl From<std::io::Error> for LedgerError {
-    fn from(err: std::io::Error) -> Self {
-        LedgerError::BlockCorrupted(err.to_string())
+impl<E: std::error::Error> From<E> for LedgerError {
+    fn from(error: E) -> Self {
+        LedgerError::Other(error.to_string())
     }
 }
 
-impl From<anyhow::Error> for LedgerError {
-    fn from(err: anyhow::Error) -> Self {
-        LedgerError::Other(err.to_string())
+impl From<LedgerError> for anyhow::Error {
+    fn from(error: LedgerError) -> Self {
+        anyhow::anyhow!(error)
     }
 }
 
