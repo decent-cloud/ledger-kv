@@ -65,11 +65,6 @@ pub fn persistent_storage_size_bytes() -> u64 {
 
 pub fn persistent_storage_read64(offset: u64, buf: &mut [u8]) -> anyhow::Result<()> {
     ic_cdk::api::stable::stable64_read(offset, buf);
-    debug!(
-        "Reading {} bytes from persistent storage @offset 0x{:0x}",
-        buf.len(),
-        offset
-    );
     Ok(())
 }
 
@@ -81,16 +76,7 @@ pub fn persistent_storage_write64(offset: u64, buf: &[u8]) {
             (stable_memory_bytes_new - stable_memory_size_bytes) / PERSISTENT_STORAGE_PAGE_SIZE + 1,
         )
         .unwrap();
-        info!(
-            "Growing persistent storage to {} bytes.",
-            stable_memory_bytes_new
-        );
     }
-    info!(
-        "Writing {} bytes to persistent storage @offset 0x{:0x}",
-        buf.len(),
-        offset
-    );
     ic_cdk::api::stable::stable64_write(offset, buf)
 }
 
