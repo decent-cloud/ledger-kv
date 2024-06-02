@@ -76,6 +76,10 @@ impl LedgerBlock {
             hash,
         }
     }
+
+    pub fn entries(&self) -> &Vec<LedgerEntry> {
+        &self.entries
+    }
 }
 
 impl std::fmt::Display for LedgerBlock {
