@@ -162,6 +162,7 @@ pub struct LedgerKV {
 impl LedgerKV {
     /// Create a new LedgerKV instance.
     /// If `labels_to_index` is `None`, then all labels will be indexed.
+    /// Note that iterating over non-indexed labels will not be possible through .iter()
     pub fn new(labels_to_index: Option<Vec<String>>) -> anyhow::Result<Self> {
         let mut result = LedgerKV {
             metadata: RefCell::new(Metadata::new()),
