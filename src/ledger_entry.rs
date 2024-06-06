@@ -3,7 +3,7 @@ use base64::Engine;
 use borsh::{BorshDeserialize, BorshSerialize};
 
 /// Enum defining the different operations that can be performed on entries.
-#[derive(BorshSerialize, BorshDeserialize, Clone, PartialEq, Eq, Debug)]
+#[derive(BorshSerialize, BorshDeserialize, Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Operation {
     Upsert,
     Delete,
@@ -14,11 +14,16 @@ pub type EntryValue = Vec<u8>;
 
 /// Struct representing an entry stored for a particular key in the key-value store.
 #[derive(BorshSerialize, BorshDeserialize, Clone, PartialEq, Eq, Debug)]
-pub struct LedgerEntry {
-    pub label: String,
-    pub key: EntryKey,
-    pub value: EntryValue,
-    pub operation: Operation,
+pub struct LedgerEntryV1 {
+    label: String,
+    key: EntryKey,
+    value: EntryValue,
+    operation: Operation,
+}
+
+#[derive(BorshSerialize, BorshDeserialize, Clone, PartialEq, Eq, Debug)]
+pub enum LedgerEntry {
+    V1(LedgerEntryV1),
 }
 
 impl LedgerEntry {
@@ -28,36 +33,65 @@ impl LedgerEntry {
         value: V,
         operation: Operation,
     ) -> Self {
-        LedgerEntry {
+        LedgerEntry::V1(LedgerEntryV1 {
             label: label.as_ref().to_string(),
             key: key.as_ref().to_vec(),
             value: value.as_ref().to_vec(),
             operation,
+        })
+    }
+
+    pub fn label(&self) -> &str {
+        match self {
+            LedgerEntry::V1(entry) => &entry.label,
+        }
+    }
+
+    pub fn key(&self) -> &[u8] {
+        match self {
+            LedgerEntry::V1(entry) => &entry.key,
+        }
+    }
+
+    pub fn value(&self) -> &[u8] {
+        match self {
+            LedgerEntry::V1(entry) => &entry.value,
+        }
+    }
+
+    pub fn operation(&self) -> Operation {
+        match self {
+            LedgerEntry::V1(entry) => entry.operation,
         }
     }
 }
 
 impl std::fmt::Display for LedgerEntry {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        let key = match String::from_utf8(self.key.clone()) {
+        let key = match String::try_from_slice(self.key()) {
             Ok(v) => v,
-            Err(_) => BASE64.encode(self.key.clone()),
+            Err(_) => BASE64.encode(self.key()),
         };
-        let value = match String::from_utf8(self.value.clone()) {
+        let value = match String::try_from_slice(self.value()) {
             Ok(v) => v,
-            Err(_) => BASE64.encode(self.value.clone()),
+            Err(_) => BASE64.encode(self.value()),
         };
-        write!(f, "[{}] Key: {}, Value: {}", self.label, key, value)
+        write!(f, "[{}] Key: {}, Value: {}", self.label(), key, value)
     }
 }
 
 #[derive(BorshSerialize, BorshDeserialize, Clone, PartialEq, Eq, Debug)]
-pub struct LedgerBlock {
-    pub(crate) entries: Vec<LedgerEntry>,
-    pub(crate) offset: u64,
-    pub(crate) offset_next: Option<u64>,
-    pub(crate) timestamp: u64,
-    pub(crate) hash: Vec<u8>,
+pub struct LedgerBlockV1 {
+    entries: Vec<LedgerEntry>,
+    offset: u64,
+    offset_next: Option<u64>,
+    timestamp: u64,
+    hash: Vec<u8>,
+}
+
+#[derive(BorshSerialize, BorshDeserialize, Clone, PartialEq, Eq, Debug)]
+pub enum LedgerBlock {
+    V1(LedgerBlockV1),
 }
 
 impl LedgerBlock {
@@ -68,17 +102,49 @@ impl LedgerBlock {
         timestamp: u64,
         hash: Vec<u8>,
     ) -> Self {
-        LedgerBlock {
+        LedgerBlock::V1(LedgerBlockV1 {
             entries,
             offset,
             offset_next,
             timestamp,
             hash,
+        })
+    }
+
+    pub fn entries(&self) -> &[LedgerEntry] {
+        match self {
+            LedgerBlock::V1(block) => &block.entries,
         }
     }
 
-    pub fn entries(&self) -> &Vec<LedgerEntry> {
-        &self.entries
+    pub fn offset(&self) -> u64 {
+        match self {
+            LedgerBlock::V1(block) => block.offset,
+        }
+    }
+
+    pub fn offset_next(&self) -> Option<u64> {
+        match self {
+            LedgerBlock::V1(block) => block.offset_next,
+        }
+    }
+
+    pub fn offset_next_set(&mut self, value: Option<u64>) {
+        match self {
+            LedgerBlock::V1(block) => block.offset_next = value,
+        }
+    }
+
+    pub fn timestamp(&self) -> u64 {
+        match self {
+            LedgerBlock::V1(block) => block.timestamp,
+        }
+    }
+
+    pub fn hash(&self) -> &[u8] {
+        match self {
+            LedgerBlock::V1(block) => &block.hash,
+        }
     }
 }
 
@@ -87,13 +153,13 @@ impl std::fmt::Display for LedgerBlock {
         write!(
             f,
             "[{}] ~-=-~-=-~-=-~ Ledger block at offsets 0x{:x} .. {:x?} hash {}",
-            self.timestamp,
-            self.offset,
-            self.offset_next,
-            hex::encode(self.hash.as_slice())
+            self.timestamp(),
+            self.offset(),
+            self.offset_next(),
+            hex::encode(self.hash())
         )?;
-        for entry in &self.entries {
-            write!(f, "\n[{}] {}", self.timestamp, entry)?
+        for entry in self.entries() {
+            write!(f, "\n[{}] {}", self.timestamp(), entry)?
         }
         Ok(())
     }
@@ -109,10 +175,10 @@ mod tests {
         let value = vec![4, 5, 6];
         let entry = LedgerEntry::new("test_label", &key, value.clone(), Operation::Upsert);
 
-        assert_eq!(entry.label, "test_label");
-        assert_eq!(entry.key, key);
-        assert_eq!(entry.value, value);
-        assert_eq!(entry.operation, Operation::Upsert);
+        assert_eq!(entry.label(), "test_label");
+        assert_eq!(entry.key(), key);
+        assert_eq!(entry.value(), value);
+        assert_eq!(entry.operation(), Operation::Upsert);
     }
 
     #[test]

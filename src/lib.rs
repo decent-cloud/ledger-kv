@@ -91,15 +91,20 @@ pub type AHashSet<K> = HashSet<K, BuildHasherDefault<ahash::AHasher>>;
 
 /// Struct representing the metadata of the ledger.
 #[derive(BorshSerialize, BorshDeserialize, Clone, Debug)]
-pub(crate) struct Metadata {
+pub struct MetadataV1 {
     /// The number of blocks in the ledger so far.
-    pub(crate) num_blocks: usize,
+    num_blocks: usize,
     /// The chain hash of the entire ledger, to be used as the initial hash of the next block.
-    pub(crate) last_block_chain_hash: Vec<u8>,
+    last_block_chain_hash: Vec<u8>,
     /// The timestamp of the last block
-    pub(crate) last_block_timestamp_ns: u64,
+    last_block_timestamp_ns: u64,
     /// The offset in the persistent storage where the next block will be written.
-    pub(crate) next_block_write_position: u64,
+    next_block_write_position: u64,
+}
+
+#[derive(BorshSerialize, BorshDeserialize, Clone, Debug)]
+pub enum Metadata {
+    V1(MetadataV1),
 }
 
 impl Default for Metadata {
@@ -108,12 +113,12 @@ impl Default for Metadata {
             "next_write_position: 0x{:0x}",
             partition_table::get_data_partition().start_lba
         );
-        Metadata {
+        Metadata::V1(MetadataV1 {
             num_blocks: 0,
             last_block_chain_hash: Vec::new(),
             last_block_timestamp_ns: 0,
             next_block_write_position: partition_table::get_data_partition().start_lba,
-        }
+        })
     }
 }
 
@@ -123,10 +128,31 @@ impl Metadata {
     }
 
     pub fn clear(&mut self) {
-        self.num_blocks = 0;
-        self.last_block_chain_hash = Vec::new();
-        self.last_block_timestamp_ns = 0;
-        self.next_block_write_position = partition_table::get_data_partition().start_lba;
+        *self = Metadata::default();
+    }
+
+    pub fn num_blocks(&self) -> usize {
+        match self {
+            Metadata::V1(metadata) => metadata.num_blocks,
+        }
+    }
+
+    pub fn last_block_chain_hash(&self) -> &[u8] {
+        match self {
+            Metadata::V1(metadata) => metadata.last_block_chain_hash.as_slice(),
+        }
+    }
+
+    pub fn last_block_timestamp_ns(&self) -> u64 {
+        match self {
+            Metadata::V1(metadata) => metadata.last_block_timestamp_ns,
+        }
+    }
+
+    pub fn next_block_write_position(&self) -> u64 {
+        match self {
+            Metadata::V1(metadata) => metadata.next_block_write_position,
+        }
     }
 
     pub fn append_block(
@@ -135,18 +161,26 @@ impl Metadata {
         block_timestamp_ns: u64,
         next_block_write_position: u64,
     ) {
-        self.num_blocks += 1;
-        self.last_block_chain_hash = parent_hash.to_vec();
-        self.last_block_timestamp_ns = block_timestamp_ns;
-        self.next_block_write_position = next_block_write_position;
+        match self {
+            Metadata::V1(metadata) => {
+                metadata.num_blocks += 1;
+                metadata.last_block_chain_hash = parent_hash.to_vec();
+                metadata.last_block_timestamp_ns = block_timestamp_ns;
+                metadata.next_block_write_position = next_block_write_position;
+            }
+        }
     }
 
     fn get_last_block_chain_hash(&self) -> &[u8] {
-        self.last_block_chain_hash.as_slice()
+        match self {
+            Metadata::V1(metadata) => metadata.last_block_chain_hash.as_slice(),
+        }
     }
 
     fn get_last_block_timestamp_ns(&self) -> u64 {
-        self.last_block_timestamp_ns
+        match self {
+            Metadata::V1(metadata) => metadata.last_block_timestamp_ns,
+        }
     }
 }
 
@@ -223,7 +257,7 @@ impl LedgerKV {
             )?;
             let block = LedgerBlock::new(
                 block_entries,
-                self.metadata.borrow().next_block_write_position,
+                self.metadata.borrow().next_block_write_position(),
                 None,
                 block_timestamp,
                 hash,
@@ -249,9 +283,9 @@ impl LedgerKV {
         let label = label.as_ref().to_string();
         for map in [&self.next_block_entries, &self.entries] {
             if let Some(entry) = lookup(map, &label, key) {
-                match entry.operation {
+                match entry.operation() {
                     Operation::Upsert => {
-                        return Ok(entry.value.clone());
+                        return Ok(entry.value().to_vec());
                     }
                     Operation::Delete => {
                         return Err(LedgerError::EntryNotFound);
@@ -305,24 +339,24 @@ impl LedgerKV {
 
             let expected_hash = Self::_compute_block_chain_hash(
                 &parent_hash,
-                &ledger_block.entries,
-                ledger_block.timestamp,
+                &ledger_block.entries(),
+                ledger_block.timestamp(),
             )?;
-            if ledger_block.hash != expected_hash {
+            if ledger_block.hash() != expected_hash {
                 return Err(anyhow::format_err!(
                     "Hash mismatch: expected {:?}, got {:?}",
                     expected_hash,
-                    ledger_block.hash
+                    ledger_block.hash()
                 ));
             };
 
             parent_hash.clear();
-            parent_hash.extend_from_slice(&ledger_block.hash);
+            parent_hash.extend_from_slice(&ledger_block.hash());
 
             self.metadata.borrow_mut().append_block(
                 parent_hash.as_slice(),
-                ledger_block.timestamp,
-                ledger_block.offset_next.expect("offset must be set"),
+                ledger_block.timestamp(),
+                ledger_block.offset_next().expect("offset must be set"),
             );
 
             updates.push(ledger_block);
@@ -330,34 +364,35 @@ impl LedgerKV {
 
         // Step 2: Add ledger entries into the index (self.entries) for quick search
         for ledger_block in updates.into_iter() {
-            for ledger_entry in ledger_block.entries.iter() {
+            for ledger_entry in ledger_block.entries() {
                 // Skip entries that are not in the labels_to_index
                 if !match &self.labels_to_index {
-                    Some(labels_to_index) => labels_to_index.contains(ledger_entry.label.as_str()),
+                    Some(labels_to_index) => labels_to_index.contains(ledger_entry.label()),
                     None => true,
                 } {
                     continue;
                 }
-                let entries = match self.entries.get_mut(ledger_entry.label.as_str()) {
+                let entries = match self.entries.get_mut(ledger_entry.label()) {
                     Some(entries) => entries,
                     None => {
                         let new_map = IndexMap::new();
-                        self.entries.insert(ledger_entry.label.clone(), new_map);
                         self.entries
-                            .get_mut(&ledger_entry.label)
+                            .insert(ledger_entry.label().to_string(), new_map);
+                        self.entries
+                            .get_mut(ledger_entry.label())
                             .ok_or(anyhow::format_err!(
                                 "Entry label {:?} not found",
-                                ledger_entry.label
+                                ledger_entry.label()
                             ))?
                     }
                 };
 
-                match &ledger_entry.operation {
+                match &ledger_entry.operation() {
                     Operation::Upsert => {
-                        entries.insert(ledger_entry.key.clone(), ledger_entry.clone());
+                        entries.insert(ledger_entry.key().to_vec(), ledger_entry.clone());
                     }
                     Operation::Delete => {
-                        entries.swap_remove(&ledger_entry.key);
+                        entries.swap_remove(&ledger_entry.key().to_vec());
                     }
                 }
             }
@@ -374,14 +409,14 @@ impl LedgerKV {
                 .get(label)
                 .map(|entries| entries.values())
                 .unwrap_or_default()
-                .filter(|entry| entry.operation == Operation::Upsert)
+                .filter(|entry| entry.operation() == Operation::Upsert)
                 .collect::<Vec<_>>()
                 .into_iter(),
             None => self
                 .next_block_entries
                 .values()
                 .flat_map(|entries| entries.values())
-                .filter(|entry| entry.operation == Operation::Upsert)
+                .filter(|entry| entry.operation() == Operation::Upsert)
                 .collect::<Vec<_>>()
                 .into_iter(),
         }
@@ -394,14 +429,14 @@ impl LedgerKV {
                 .get(label)
                 .map(|entries| entries.values())
                 .unwrap_or_default()
-                .filter(|entry| entry.operation == Operation::Upsert)
+                .filter(|entry| entry.operation() == Operation::Upsert)
                 .collect::<Vec<_>>()
                 .into_iter(),
             None => self
                 .entries
                 .values()
                 .flat_map(|entries| entries.values())
-                .filter(|entry| entry.operation == Operation::Upsert)
+                .filter(|entry| entry.operation() == Operation::Upsert)
                 .collect::<Vec<_>>()
                 .into_iter(),
         }
@@ -426,13 +461,13 @@ impl LedgerKV {
                     )))
                 }
             };
-            *state = ledger_block.offset_next.expect("offset_next must be set");
+            *state = ledger_block.offset_next().expect("offset_next must be set");
             Some(Ok(ledger_block))
         })
     }
 
     pub fn num_blocks(&self) -> usize {
-        self.metadata.borrow().num_blocks
+        self.metadata.borrow().num_blocks()
     }
 
     pub fn get_latest_block_hash(&self) -> Vec<u8> {
@@ -444,7 +479,7 @@ impl LedgerKV {
     }
 
     pub fn get_next_block_write_position(&self) -> u64 {
-        self.metadata.borrow().next_block_write_position
+        self.metadata.borrow().next_block_write_position()
     }
 
     fn _compute_block_chain_hash(
@@ -466,7 +501,7 @@ impl LedgerKV {
         let serialized_data = to_vec(&ledger_block)?;
         info!(
             "Appending block @timestamp {} with {} bytes: {}",
-            ledger_block.timestamp,
+            ledger_block.timestamp(),
             serialized_data.len(),
             ledger_block,
         );
@@ -475,20 +510,20 @@ impl LedgerKV {
         let serialized_data_len = block_len_bytes.to_le_bytes();
 
         persistent_storage_write64(
-            self.metadata.borrow().next_block_write_position,
+            self.metadata.borrow().next_block_write_position(),
             &serialized_data_len,
         );
         persistent_storage_write64(
-            self.metadata.borrow().next_block_write_position + serialized_data_len.len() as u64,
+            self.metadata.borrow().next_block_write_position() + serialized_data_len.len() as u64,
             &serialized_data,
         );
 
-        let next_write_position = self.metadata.borrow().next_block_write_position
+        let next_write_position = self.metadata.borrow().next_block_write_position()
             + serialized_data_len.len() as u64
             + serialized_data.len() as u64;
         self.metadata.borrow_mut().append_block(
-            &ledger_block.hash,
-            ledger_block.timestamp,
+            &ledger_block.hash(),
+            ledger_block.timestamp(),
             next_write_position,
         );
         Ok(())
@@ -520,8 +555,9 @@ impl LedgerKV {
             .map_err(|err| LedgerError::BlockCorrupted(err.to_string()))
         {
             Ok(mut block) => {
-                block.offset_next =
-                    Some(offset + std::mem::size_of::<u32>() as u64 + block_len as u64);
+                block.offset_next_set(Some(
+                    offset + std::mem::size_of::<u32>() as u64 + block_len as u64,
+                ));
                 Ok(block)
             }
             Err(err) => Err(err),
@@ -536,13 +572,13 @@ impl LedgerKV {
         operation: Operation,
     ) -> Result<(), LedgerError> {
         let entry = LedgerEntry::new(label.as_ref(), key, value, operation);
-        match self.next_block_entries.get_mut(&entry.label) {
+        match self.next_block_entries.get_mut(entry.label()) {
             Some(entries) => {
-                entries.insert(entry.key.clone(), entry);
+                entries.insert(entry.key().to_vec(), entry);
             }
             None => {
                 let mut new_map = IndexMap::new();
-                new_map.insert(entry.key.clone(), entry);
+                new_map.insert(entry.key().to_vec(), entry);
                 self.next_block_entries
                     .insert(label.as_ref().to_string(), new_map);
             }
@@ -636,8 +672,8 @@ mod tests {
         );
         let cumulative_hash = LedgerKV::_compute_block_chain_hash(
             &parent_hash,
-            &ledger_block.entries,
-            ledger_block.timestamp,
+            &ledger_block.entries(),
+            ledger_block.timestamp(),
         )
         .unwrap();
 
@@ -646,8 +682,8 @@ mod tests {
         assert_eq!(
             cumulative_hash,
             vec![
-                128, 130, 83, 83, 216, 223, 105, 43, 136, 131, 247, 19, 6, 9, 108, 116, 177, 33,
-                36, 151, 131, 221, 174, 99, 233, 152, 122, 219, 116, 223, 163, 78
+                21, 5, 93, 78, 94, 126, 142, 35, 221, 131, 204, 67, 57, 54, 102, 107, 225, 68, 197,
+                244, 204, 60, 238, 250, 126, 8, 240, 137, 84, 55, 3, 91
             ]
         );
     }
@@ -671,7 +707,7 @@ mod tests {
             entries.get(&key),
             Some(&LedgerEntry::new("Label2", key, value, Operation::Upsert,))
         );
-        assert_eq!(ledger_kv.metadata.borrow().num_blocks, 1);
+        assert_eq!(ledger_kv.metadata.borrow().num_blocks(), 1);
         assert!(ledger_kv.next_block_entries.is_empty());
     }
 
@@ -724,12 +760,12 @@ mod tests {
             .unwrap();
         assert_eq!(ledger_kv.get("Label1", &key).unwrap(), value); // Before delete: the value is there
         ledger_kv.delete("Label1", key.clone()).unwrap();
-        let expected_tombstone = Some(LedgerEntry {
-            label: "Label1".to_string(),
-            key: key.clone(),
-            value: vec![],
-            operation: Operation::Delete,
-        });
+        let expected_tombstone = Some(LedgerEntry::new(
+            "Label1",
+            key.clone(),
+            vec![],
+            Operation::Delete,
+        ));
         assert_eq!(
             ledger_kv.get("Label1", &key).unwrap_err(),
             LedgerError::EntryNotFound
@@ -843,12 +879,12 @@ mod tests {
         let entries = ledger_kv.entries.get("Label2").unwrap();
         assert_eq!(
             entries.get(&key),
-            Some(LedgerEntry {
-                label: "Label2".to_string(),
-                key: key.clone(),
-                value: vec![],
-                operation: Operation::Delete
-            })
+            Some(LedgerEntry::new(
+                "Label2",
+                key.clone(),
+                vec![],
+                Operation::Delete
+            ))
             .as_ref()
         );
         assert_eq!(ledger_kv.entries.get("Label1"), None);
@@ -872,8 +908,8 @@ mod tests {
             .unwrap();
         assert!(ledger_kv.commit_block().is_ok());
         let expected_parent_hash = vec![
-            25, 222, 73, 212, 70, 56, 127, 7, 43, 93, 4, 103, 142, 248, 115, 175, 93, 113, 191,
-            187, 135, 255, 223, 107, 110, 166, 178, 178, 20, 189, 187, 251,
+            245, 142, 15, 179, 87, 133, 107, 164, 123, 16, 145, 52, 243, 153, 170, 45, 177, 243,
+            61, 37, 162, 237, 226, 100, 94, 136, 159, 73, 117, 58, 222, 153,
         ];
         ledger_kv.refresh_ledger().unwrap();
 
@@ -887,15 +923,10 @@ mod tests {
             .clone();
         assert_eq!(
             entry,
-            LedgerEntry {
-                label: "Label2".to_string(),
-                key,
-                value,
-                operation: Operation::Upsert,
-            }
+            LedgerEntry::new("Label2", key.clone(), value.clone(), Operation::Upsert)
         );
         assert_eq!(
-            ledger_kv.metadata.borrow().last_block_chain_hash,
+            ledger_kv.metadata.borrow().last_block_chain_hash(),
             expected_parent_hash
         );
 
