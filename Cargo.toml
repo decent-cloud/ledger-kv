@@ -18,7 +18,7 @@ anyhow = "1.0.86"
 ahash = { version = "0.8.11", default-features = false, features = [
     "compile-time-rng",
 ] }
-base64 = { version = "0.22.0", default-features = false, features = ["alloc"] }
+base64 = { version = "0.22.1", default-features = false, features = ["alloc"] }
 borsh = { version = "1.5.1", features = ["derive"] }
 hex = "0.4.3"
 indexmap = "2.2.6"
