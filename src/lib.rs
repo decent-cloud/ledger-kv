@@ -339,7 +339,7 @@ impl LedgerKV {
 
             let expected_hash = Self::_compute_block_chain_hash(
                 &parent_hash,
-                &ledger_block.entries(),
+                ledger_block.entries(),
                 ledger_block.timestamp(),
             )?;
             if ledger_block.hash() != expected_hash {
@@ -351,7 +351,7 @@ impl LedgerKV {
             };
 
             parent_hash.clear();
-            parent_hash.extend_from_slice(&ledger_block.hash());
+            parent_hash.extend_from_slice(ledger_block.hash());
 
             self.metadata.borrow_mut().append_block(
                 parent_hash.as_slice(),
@@ -522,7 +522,7 @@ impl LedgerKV {
             + serialized_data_len.len() as u64
             + serialized_data.len() as u64;
         self.metadata.borrow_mut().append_block(
-            &ledger_block.hash(),
+            ledger_block.hash(),
             ledger_block.timestamp(),
             next_write_position,
         );
@@ -672,7 +672,7 @@ mod tests {
         );
         let cumulative_hash = LedgerKV::_compute_block_chain_hash(
             &parent_hash,
-            &ledger_block.entries(),
+            ledger_block.entries(),
             ledger_block.timestamp(),
         )
         .unwrap();
