@@ -466,7 +466,7 @@ impl LedgerKV {
         })
     }
 
-    pub fn num_blocks(&self) -> usize {
+    pub fn get_blocks_count(&self) -> usize {
         self.metadata.borrow().num_blocks()
     }
 
@@ -480,6 +480,10 @@ impl LedgerKV {
 
     pub fn get_next_block_write_position(&self) -> u64 {
         self.metadata.borrow().next_block_write_position()
+    }
+
+    pub fn get_next_block_entries_count(&self, label: Option<&str>) -> usize {
+        self.next_block_iter(label).count()
     }
 
     fn _compute_block_chain_hash(
