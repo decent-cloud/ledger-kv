@@ -1,13 +1,13 @@
 [package]
-name = "ledger-kv"
+name = "ledger_map"
 version = "0.2.0"
 edition = "2021"
 description = "A Rust-based key-value store designed for append-only data storage. Features SHA-256 checksums for data integrity and cross-compiles to wasm32 for smart contract applications."
 license = "MIT OR Apache-2.0"
-documentation = "https://github.com/decent-cloud/ledger-kv"
+documentation = "https://github.com/decent-cloud/ledger-map"
 readme = "README.md"
-homepage = "https://github.com/decent-cloud/ledger-kv"
-repository = "https://github.com/decent-cloud/ledger-kv"
+homepage = "https://github.com/decent-cloud/ledger-map"
+repository = "https://github.com/decent-cloud/ledger-map"
 
 [lib]
 name = "ledger_map"

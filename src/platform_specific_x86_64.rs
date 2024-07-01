@@ -25,7 +25,7 @@ impl BackingFile {
 
     pub fn change_backing_file(&mut self, file_path: Option<PathBuf>) {
         let file_path = file_path.unwrap_or_else(|| match dirs::data_local_dir() {
-            Some(path) => path.join("ledger-kv").join("data.bin"),
+            Some(path) => path.join("ledger-map").join("data.bin"),
             None => PathBuf::from("data.bin"),
         });
         info!("Using persistent storage: {:?}", file_path);
