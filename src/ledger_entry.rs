@@ -95,7 +95,7 @@ pub enum LedgerBlock {
 }
 
 impl LedgerBlock {
-    pub(crate) fn new(
+    pub fn new(
         entries: Vec<LedgerEntry>,
         offset: u64,
         offset_next: Option<u64>,
@@ -169,15 +169,19 @@ impl std::fmt::Display for LedgerBlock {
 mod tests {
     use super::*;
 
+    pub fn create_dummy_ledger_entry(seed: u64) -> LedgerEntry {
+        let key = seed.to_le_bytes().to_vec();
+        let value = (seed + 1).to_le_bytes().to_vec();
+        LedgerEntry::new("test_label", &key, value, Operation::Upsert)
+    }
+
     #[test]
     fn test_ledger_entry_new() {
-        let key = vec![1, 2, 3];
-        let value = vec![4, 5, 6];
-        let entry = LedgerEntry::new("test_label", &key, value.clone(), Operation::Upsert);
+        let entry = create_dummy_ledger_entry(1);
 
         assert_eq!(entry.label(), "test_label");
-        assert_eq!(entry.key(), key);
-        assert_eq!(entry.value(), value);
+        assert_eq!(entry.key(), seed.to_le_bytes().to_vec());
+        assert_eq!(entry.value(), (seed + 1).to_le_bytes().to_vec());
         assert_eq!(entry.operation(), Operation::Upsert);
     }
 
