@@ -1,8 +1,8 @@
-/// This file contains the implementation of a command-line interface (CLI) for interacting with the LedgerKV library.
+/// This file contains the implementation of a command-line interface (CLI) for interacting with the LedgerMap library.
 ///
 /// The CLI allows various ledger operations, such as listing, inserting/updating (upserting), and deleting entries.
 ///
-use ledger_kv::{platform_specific, LedgerKV};
+use ledger_map::{platform_specific, LedgerMap};
 
 use clap::{arg, Arg, Command};
 use std::path::PathBuf;
@@ -19,8 +19,8 @@ struct ParsedArgs {
 
 /// Parse the command-line arguments using clap library
 fn parse_args() -> ParsedArgs {
-    let matches = Command::new("LedgerKV CLI")
-        .about("LedgerKV CLI")
+    let matches = Command::new("LedgerMap CLI")
+        .about("LedgerMap CLI")
         .arg(arg!(--list "List entries").required(false))
         .arg(
             Arg::new("upsert")
@@ -79,26 +79,26 @@ fn main() -> anyhow::Result<()> {
     let ledger_path = args.path.as_ref().map(|p| PathBuf::from_str(p).unwrap());
 
     platform_specific::override_backing_file(ledger_path);
-    let mut ledger_kv = LedgerKV::new(None).expect("Failed to create ledger");
+    let mut ledger_map = LedgerMap::new(None).expect("Failed to create ledger");
 
     if args.list {
         println!("Listing entries:");
         // Iterate over the entries in the ledger and print them
-        for entry in ledger_kv.iter(None) {
+        for entry in ledger_map.iter(None) {
             println!("{}", entry);
         }
     }
 
     if let Some((key, value)) = args.upsert {
         // Upsert (insert/update) an entry in the ledger
-        ledger_kv.upsert("Unspecified", key.as_bytes(), value.as_bytes())?;
+        ledger_map.upsert("Unspecified", key.as_bytes(), value.as_bytes())?;
         println!("Upsert entry with KEY: {}, VALUE: {}", key, value);
-        ledger_kv.commit_block()?;
+        ledger_map.commit_block()?;
     }
 
     if let Some(key) = args.delete {
         // Delete an entry from the ledger
-        ledger_kv.delete("Unspecified", key.as_bytes())?;
+        ledger_map.delete("Unspecified", key.as_bytes())?;
         println!("Delete entry with KEY: {}", key);
     }
 

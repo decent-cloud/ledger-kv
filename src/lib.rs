@@ -1,59 +1,59 @@
-//! This module implements a key-value storage system called LedgerKV.
+//! This module implements a key-value storage system called LedgerMap.
 //!
-//! The LedgerKV struct provides methods for inserting, deleting, and retrieving key-value entries.
+//! The LedgerMap struct provides methods for inserting, deleting, and retrieving key-value entries.
 //! It journals the entries in a binary file. Each entry is appended to the file along with its
 //! length, allowing efficient retrieval and updates.
 //!
-//! The LedgerKV struct maintains an in-memory index of the entries for quick lookups. It uses a HashMap
+//! The LedgerMap struct maintains an in-memory index of the entries for quick lookups. It uses a HashMap
 //! to store the entries, where the key is an enum value representing the label of the entry, and the value
 //! is an IndexMap of key-value pairs.
 //!
-//! The LedgerKV struct also maintains a metadata file that keeps track of the number of entries, the last offset,
+//! The LedgerMap struct also maintains a metadata file that keeps track of the number of entries, the last offset,
 //! and the parent hash of the entries. The parent hash is used to compute the cumulative hash of each entry,
 //! ensuring data integrity.
 //!
-//! The LedgerKV struct provides methods for inserting and deleting entries, as well as iterating over the entries
+//! The LedgerMap struct provides methods for inserting and deleting entries, as well as iterating over the entries
 //! by label or in raw form. It also supports re-reading the in-memory index and metadata from the binary file.
 //!
-//! Entries of LedgerKV are stored in blocks. Each block contains a vector of entries, and the block is committed
+//! Entries of LedgerMap are stored in blocks. Each block contains a vector of entries, and the block is committed
 //! to the binary file when the user calls the commit_block method. A block also contains metadata such as the
 //! offset of block in the persistent storage, the timestamp, and the parent hash.
 //!
 //! Example usage:
 //!
 //! ```rust
-//! use ledger_kv::{LedgerKV};
+//! use ledger_map::{LedgerMap};
 //!
 //! // Optional: Override the backing file path
 //! // use std::path::PathBuf;
-//! // let ledger_path = PathBuf::from("/tmp/ledger_kv/test_data.bin");
-//! // ledger_kv::platform_specific::override_backing_file(Some(ledger_path));
+//! // let ledger_path = PathBuf::from("/tmp/ledger_map/test_data.bin");
+//! // ledger_map::platform_specific::override_backing_file(Some(ledger_path));
 //!
-//! // Create a new LedgerKV instance
-//! let mut ledger_kv = LedgerKV::new(None).expect("Failed to create LedgerKV");
+//! // Create a new LedgerMap instance
+//! let mut ledger_map = LedgerMap::new(None).expect("Failed to create LedgerMap");
 //!
 //! // Insert a few new entries, each with a separate label
-//! ledger_kv.upsert("Label1", b"key1".to_vec(), b"value1".to_vec()).unwrap();
-//! ledger_kv.upsert("Label2", b"key2".to_vec(), b"value2".to_vec()).unwrap();
-//! ledger_kv.commit_block().unwrap();
+//! ledger_map.upsert("Label1", b"key1".to_vec(), b"value1".to_vec()).unwrap();
+//! ledger_map.upsert("Label2", b"key2".to_vec(), b"value2".to_vec()).unwrap();
+//! ledger_map.commit_block().unwrap();
 //!
 //! // Retrieve all entries
-//! let entries = ledger_kv.iter(None).collect::<Vec<_>>();
+//! let entries = ledger_map.iter(None).collect::<Vec<_>>();
 //! println!("All entries: {:?}", entries);
 //! // Only entries with the Label1 label
-//! let entries = ledger_kv.iter(Some("Label1")).collect::<Vec<_>>();
+//! let entries = ledger_map.iter(Some("Label1")).collect::<Vec<_>>();
 //! println!("Label1 entries: {:?}", entries);
 //! // Only entries with the Label2 label
-//! let entries = ledger_kv.iter(Some("Label2")).collect::<Vec<_>>();
+//! let entries = ledger_map.iter(Some("Label2")).collect::<Vec<_>>();
 //! println!("Label2 entries: {:?}", entries);
 //!
 //! // Delete an entry
-//! ledger_kv.delete("Label1", b"key1".to_vec()).unwrap();
-//! ledger_kv.commit_block().unwrap();
+//! ledger_map.delete("Label1", b"key1".to_vec()).unwrap();
+//! ledger_map.commit_block().unwrap();
 //! // Label1 entries are now empty
-//! assert_eq!(ledger_kv.iter(Some("Label1")).count(), 0);
+//! assert_eq!(ledger_map.iter(Some("Label1")).count(), 0);
 //! // Label2 entries still exist
-//! assert_eq!(ledger_kv.iter(Some("Label2")).count(), 1);
+//! assert_eq!(ledger_map.iter(Some("Label2")).count(), 1);
 //! ```
 
 #[cfg(target_arch = "wasm32")]
@@ -185,7 +185,7 @@ impl Metadata {
 }
 
 #[derive(Debug)]
-pub struct LedgerKV {
+pub struct LedgerMap {
     metadata: RefCell<Metadata>,
     labels_to_index: Option<AHashSet<String>>,
     entries: IndexMap<String, IndexMap<EntryKey, LedgerEntry>>,
@@ -193,12 +193,12 @@ pub struct LedgerKV {
     current_timestamp_nanos: fn() -> u64,
 }
 
-impl LedgerKV {
-    /// Create a new LedgerKV instance.
+impl LedgerMap {
+    /// Create a new LedgerMap instance.
     /// If `labels_to_index` is `None`, then all labels will be indexed.
     /// Note that iterating over non-indexed labels will not be possible through .iter()
     pub fn new(labels_to_index: Option<Vec<String>>) -> anyhow::Result<Self> {
-        let mut result = LedgerKV {
+        let mut result = LedgerMap {
             metadata: RefCell::new(Metadata::new()),
             labels_to_index: labels_to_index.map(AHashSet::from_iter),
             entries: IndexMap::new(),
@@ -211,7 +211,7 @@ impl LedgerKV {
 
     #[cfg(test)]
     fn with_timestamp_fn(self, get_timestamp_nanos: fn() -> u64) -> Self {
-        LedgerKV {
+        LedgerMap {
             current_timestamp_nanos: get_timestamp_nanos,
             ..self
         }
@@ -637,7 +637,7 @@ mod tests {
         let _ = env_logger::builder().is_test(true).try_init();
     }
 
-    fn new_temp_ledger(labels_to_index: Option<Vec<String>>) -> LedgerKV {
+    fn new_temp_ledger(labels_to_index: Option<Vec<String>>) -> LedgerMap {
         log_init();
         info!("Create temp ledger");
         // Create a temporary directory for the test
@@ -652,7 +652,7 @@ mod tests {
             0
         }
 
-        LedgerKV::new(labels_to_index)
+        LedgerMap::new(labels_to_index)
             .expect("Failed to create a temp ledger for the test")
             .with_timestamp_fn(mock_get_timestamp_nanos)
     }
@@ -674,7 +674,7 @@ mod tests {
             0,
             vec![],
         );
-        let cumulative_hash = LedgerKV::_compute_block_chain_hash(
+        let cumulative_hash = LedgerMap::_compute_block_chain_hash(
             &parent_hash,
             ledger_block.entries(),
             ledger_block.timestamp(),
@@ -694,40 +694,40 @@ mod tests {
 
     #[test]
     fn test_upsert() {
-        let mut ledger_kv = new_temp_ledger(None);
+        let mut ledger_map = new_temp_ledger(None);
 
         // Test upsert
         let key = b"test_key".to_vec();
         let value = b"test_value".to_vec();
-        ledger_kv
+        ledger_map
             .upsert("Label2", key.clone(), value.clone())
             .unwrap();
         println!("partition table {}", partition_table::get_partition_table());
-        assert_eq!(ledger_kv.get("Label2", &key).unwrap(), value);
-        assert!(ledger_kv.commit_block().is_ok());
-        assert_eq!(ledger_kv.get("Label2", &key).unwrap(), value);
-        let entries = ledger_kv.entries.get("Label2").unwrap();
+        assert_eq!(ledger_map.get("Label2", &key).unwrap(), value);
+        assert!(ledger_map.commit_block().is_ok());
+        assert_eq!(ledger_map.get("Label2", &key).unwrap(), value);
+        let entries = ledger_map.entries.get("Label2").unwrap();
         assert_eq!(
             entries.get(&key),
             Some(&LedgerEntry::new("Label2", key, value, Operation::Upsert,))
         );
-        assert_eq!(ledger_kv.metadata.borrow().num_blocks(), 1);
-        assert!(ledger_kv.next_block_entries.is_empty());
+        assert_eq!(ledger_map.metadata.borrow().num_blocks(), 1);
+        assert!(ledger_map.next_block_entries.is_empty());
     }
 
     #[test]
     fn test_upsert_with_matching_entry_label() {
-        let mut ledger_kv = new_temp_ledger(None);
+        let mut ledger_map = new_temp_ledger(None);
 
         let key = b"test_key".to_vec();
         let value = b"test_value".to_vec();
-        ledger_kv
+        ledger_map
             .upsert("Label1", key.clone(), value.clone())
             .unwrap();
-        assert_eq!(ledger_kv.entries.get("Label1"), None); // value not committed yet
-        assert_eq!(ledger_kv.get("Label1", &key).unwrap(), value);
-        ledger_kv.commit_block().unwrap();
-        let entries = ledger_kv.entries.get("Label1").unwrap();
+        assert_eq!(ledger_map.entries.get("Label1"), None); // value not committed yet
+        assert_eq!(ledger_map.get("Label1", &key).unwrap(), value);
+        ledger_map.commit_block().unwrap();
+        let entries = ledger_map.entries.get("Label1").unwrap();
         assert_eq!(
             entries.get(&key),
             Some(&LedgerEntry::new(
@@ -741,29 +741,29 @@ mod tests {
 
     #[test]
     fn test_upsert_with_mismatched_entry_label() {
-        let mut ledger_kv = new_temp_ledger(None);
+        let mut ledger_map = new_temp_ledger(None);
 
         let key = b"test_key".to_vec();
         let value = b"test_value".to_vec();
-        ledger_kv
+        ledger_map
             .upsert("Label2", key.clone(), value.clone())
             .unwrap();
 
         // Ensure that the entry is not added to the NodeProvider ledger since the label doesn't match
-        assert_eq!(ledger_kv.entries.get("Label1"), None);
+        assert_eq!(ledger_map.entries.get("Label1"), None);
     }
 
     #[test]
     fn test_delete_with_matching_entry_label() {
-        let mut ledger_kv = new_temp_ledger(None);
+        let mut ledger_map = new_temp_ledger(None);
 
         let key = b"test_key".to_vec();
         let value = b"test_value".to_vec();
-        ledger_kv
+        ledger_map
             .upsert("Label1", key.clone(), value.clone())
             .unwrap();
-        assert_eq!(ledger_kv.get("Label1", &key).unwrap(), value); // Before delete: the value is there
-        ledger_kv.delete("Label1", key.clone()).unwrap();
+        assert_eq!(ledger_map.get("Label1", &key).unwrap(), value); // Before delete: the value is there
+        ledger_map.delete("Label1", key.clone()).unwrap();
         let expected_tombstone = Some(LedgerEntry::new(
             "Label1",
             key.clone(),
@@ -771,51 +771,51 @@ mod tests {
             Operation::Delete,
         ));
         assert_eq!(
-            ledger_kv.get("Label1", &key).unwrap_err(),
+            ledger_map.get("Label1", &key).unwrap_err(),
             LedgerError::EntryNotFound
         ); // After delete: the value is gone in the public interface
         assert_eq!(
-            ledger_kv
+            ledger_map
                 .next_block_entries
                 .get("Label1")
                 .unwrap()
                 .get(&key),
             expected_tombstone.as_ref()
         );
-        assert_eq!(ledger_kv.entries.get("Label1"), None); // (not yet committed)
+        assert_eq!(ledger_map.entries.get("Label1"), None); // (not yet committed)
 
         // Now commit the block
-        assert!(ledger_kv.commit_block().is_ok());
+        assert!(ledger_map.commit_block().is_ok());
 
         // And recheck: the value is gone in the public interface and deletion is in the ledger
         assert_eq!(
-            ledger_kv.entries.get("Label1").unwrap().get(&key),
+            ledger_map.entries.get("Label1").unwrap().get(&key),
             expected_tombstone.as_ref()
         );
-        assert_eq!(ledger_kv.next_block_entries.get("Label1"), None);
+        assert_eq!(ledger_map.next_block_entries.get("Label1"), None);
         assert_eq!(
-            ledger_kv.get("Label1", &key).unwrap_err(),
+            ledger_map.get("Label1", &key).unwrap_err(),
             LedgerError::EntryNotFound
         );
     }
 
     #[test]
     fn test_delete_with_mismatched_entry_label() {
-        let mut ledger_kv = new_temp_ledger(None);
+        let mut ledger_map = new_temp_ledger(None);
 
         let key = b"test_key".to_vec();
         let value = b"test_value".to_vec();
-        ledger_kv
+        ledger_map
             .upsert("Label1", key.clone(), value.clone())
             .unwrap();
-        ledger_kv.get("Label1", &key).unwrap();
-        assert!(ledger_kv.entries.get("Label1").is_none()); // the value is not yet committed
-        ledger_kv.commit_block().unwrap();
-        ledger_kv.entries.get("Label1").unwrap();
-        ledger_kv.delete("Label2", key.clone()).unwrap();
+        ledger_map.get("Label1", &key).unwrap();
+        assert!(ledger_map.entries.get("Label1").is_none()); // the value is not yet committed
+        ledger_map.commit_block().unwrap();
+        ledger_map.entries.get("Label1").unwrap();
+        ledger_map.delete("Label2", key.clone()).unwrap();
 
         // Ensure that the entry is not deleted from the ledger since the label doesn't match
-        let entries_np = ledger_kv.entries.get("Label1").unwrap();
+        let entries_np = ledger_map.entries.get("Label1").unwrap();
         assert_eq!(
             entries_np.get(&key),
             Some(&LedgerEntry::new(
@@ -825,62 +825,62 @@ mod tests {
                 Operation::Upsert,
             ))
         );
-        assert_eq!(ledger_kv.entries.get("Label2"), None);
+        assert_eq!(ledger_map.entries.get("Label2"), None);
     }
 
     #[test]
     fn test_labels_to_index() {
-        let mut ledger_kv = new_temp_ledger(Some(vec!["Label1".to_string()]));
+        let mut ledger_map = new_temp_ledger(Some(vec!["Label1".to_string()]));
 
         let key = b"test_key".to_vec();
         let value1 = b"test_value1".to_vec();
         let value2 = b"test_value2".to_vec();
-        ledger_kv
+        ledger_map
             .upsert("Label1", key.clone(), value1.clone())
             .unwrap();
-        ledger_kv
+        ledger_map
             .upsert("Label2", key.clone(), value2.clone())
             .unwrap();
-        assert!(ledger_kv.entries.get("Label1").is_none()); // the value is not yet committed
-        assert!(ledger_kv.entries.get("Label2").is_none()); // the value is not yet committed
-        ledger_kv.commit_block().unwrap();
-        assert_eq!(ledger_kv.get("Label1", &key).unwrap(), value1);
+        assert!(ledger_map.entries.get("Label1").is_none()); // the value is not yet committed
+        assert!(ledger_map.entries.get("Label2").is_none()); // the value is not yet committed
+        ledger_map.commit_block().unwrap();
+        assert_eq!(ledger_map.get("Label1", &key).unwrap(), value1);
         assert_eq!(
-            ledger_kv.get("Label2", &key).unwrap_err(),
+            ledger_map.get("Label2", &key).unwrap_err(),
             LedgerError::EntryNotFound
         );
         // Delete the non-indexed entry, ensure that the indexed entry is still there
-        ledger_kv.delete("Label2", key.clone()).unwrap();
-        assert_eq!(ledger_kv.get("Label1", &key).unwrap(), value1);
+        ledger_map.delete("Label2", key.clone()).unwrap();
+        assert_eq!(ledger_map.get("Label1", &key).unwrap(), value1);
         assert_eq!(
-            ledger_kv.get("Label2", &key).unwrap_err(),
+            ledger_map.get("Label2", &key).unwrap_err(),
             LedgerError::EntryNotFound
         );
         // Delete the indexed entry, ensure that it's gone
-        ledger_kv.delete("Label1", key.clone()).unwrap();
+        ledger_map.delete("Label1", key.clone()).unwrap();
         assert_eq!(
-            ledger_kv.get("Label1", &key).unwrap_err(),
+            ledger_map.get("Label1", &key).unwrap_err(),
             LedgerError::EntryNotFound
         );
         assert_eq!(
-            ledger_kv.get("Label2", &key).unwrap_err(),
+            ledger_map.get("Label2", &key).unwrap_err(),
             LedgerError::EntryNotFound
         );
     }
 
     #[test]
     fn test_delete() {
-        let mut ledger_kv = new_temp_ledger(None);
+        let mut ledger_map = new_temp_ledger(None);
 
         // Test delete
         let key = b"test_key".to_vec();
         let value = b"test_value".to_vec();
-        ledger_kv
+        ledger_map
             .upsert("Label2", key.clone(), value.clone())
             .unwrap();
-        ledger_kv.delete("Label2", key.clone()).unwrap();
-        assert!(ledger_kv.commit_block().is_ok());
-        let entries = ledger_kv.entries.get("Label2").unwrap();
+        ledger_map.delete("Label2", key.clone()).unwrap();
+        assert!(ledger_map.commit_block().is_ok());
+        let entries = ledger_map.entries.get("Label2").unwrap();
         assert_eq!(
             entries.get(&key),
             Some(LedgerEntry::new(
@@ -891,33 +891,33 @@ mod tests {
             ))
             .as_ref()
         );
-        assert_eq!(ledger_kv.entries.get("Label1"), None);
+        assert_eq!(ledger_map.entries.get("Label1"), None);
         assert_eq!(
-            ledger_kv.get("Label2", &key).unwrap_err(),
+            ledger_map.get("Label2", &key).unwrap_err(),
             LedgerError::EntryNotFound
         );
     }
 
     #[test]
     fn test_refresh_ledger() {
-        let mut ledger_kv = new_temp_ledger(None);
+        let mut ledger_map = new_temp_ledger(None);
 
         info!("New temp ledger created");
-        info!("ledger: {:?}", ledger_kv);
+        info!("ledger: {:?}", ledger_map);
 
         let key = b"test_key".to_vec();
         let value = b"test_value".to_vec();
-        ledger_kv
+        ledger_map
             .upsert("Label2", key.clone(), value.clone())
             .unwrap();
-        assert!(ledger_kv.commit_block().is_ok());
+        assert!(ledger_map.commit_block().is_ok());
         let expected_parent_hash = vec![
             245, 142, 15, 179, 87, 133, 107, 164, 123, 16, 145, 52, 243, 153, 170, 45, 177, 243,
             61, 37, 162, 237, 226, 100, 94, 136, 159, 73, 117, 58, 222, 153,
         ];
-        ledger_kv.refresh_ledger().unwrap();
+        ledger_map.refresh_ledger().unwrap();
 
-        let entry = ledger_kv
+        let entry = ledger_map
             .entries
             .get("Label2")
             .unwrap()
@@ -930,11 +930,11 @@ mod tests {
             LedgerEntry::new("Label2", key.clone(), value.clone(), Operation::Upsert)
         );
         assert_eq!(
-            ledger_kv.metadata.borrow().last_block_chain_hash(),
+            ledger_map.metadata.borrow().last_block_chain_hash(),
             expected_parent_hash
         );
 
         // get_latest_hash should return the parent hash
-        assert_eq!(ledger_kv.get_latest_block_hash(), expected_parent_hash);
+        assert_eq!(ledger_map.get_latest_block_hash(), expected_parent_hash);
     }
 }

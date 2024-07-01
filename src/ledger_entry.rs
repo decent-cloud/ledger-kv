@@ -177,7 +177,8 @@ mod tests {
 
     #[test]
     fn test_ledger_entry_new() {
-        let entry = create_dummy_ledger_entry(1);
+        let seed = 42u64;
+        let entry = create_dummy_ledger_entry(seed);
 
         assert_eq!(entry.label(), "test_label");
         assert_eq!(entry.key(), seed.to_le_bytes().to_vec());

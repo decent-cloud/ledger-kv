@@ -10,7 +10,7 @@ homepage = "https://github.com/decent-cloud/ledger-kv"
 repository = "https://github.com/decent-cloud/ledger-kv"
 
 [lib]
-name = "ledger_kv"
+name = "ledger_map"
 path = "src/lib.rs"
 
 [dependencies]
